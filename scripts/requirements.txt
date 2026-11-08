@@ -1,0 +1,6 @@
+# Only for scripts/compare/: trying competitor tools on our sample runs. Not needed by the backend.
+arize-phoenix
+arize-phoenix-evals
+arize-phoenix-otel
+deepeval
+ollama

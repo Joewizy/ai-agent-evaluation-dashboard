@@ -1,0 +1,13 @@
+id: cost
+name: Cost
+description: How much the run cost. Full score up to the target, zero at the limit, a straight line in between.
+area: Agent behaviour
+method: code
+check: within_limit
+threshold: 0.5
+settings:
+  field: cost_usd
+  unit: USD
+  label: Cost
+  target: 0.01
+  limit: 0.10

@@ -1,0 +1,13 @@
+id: latency
+name: Speed
+description: How long the agent took. Full score up to the target, zero at the limit, a straight line in between.
+area: Agent behaviour
+method: code
+check: within_limit
+threshold: 0.5
+settings:
+  field: latency_ms
+  unit: ms
+  label: Took
+  target: 3000
+  limit: 10000

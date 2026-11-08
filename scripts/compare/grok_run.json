@@ -1,0 +1,22 @@
+{
+  "agent_name": "grok-bot",
+  "mode": "live",
+  "conversation_id": "conv-001",
+  "input": "How much is the Grok subscription?",
+  "output": "The Grok subscription is $15 a month.",
+  "context": [
+    "Pricing page: Grok Premium costs $8 per month. Premium+ costs $40 per month."
+  ],
+  "steps": [
+    {"type": "retrieval", "name": "search_pricing_docs", "input": "grok subscription price",
+     "output": "Pricing page: Grok Premium costs $8 per month. Premium+ costs $40 per month.", "latency_ms": 350},
+    {"type": "tool_call", "name": "get_latest_prices", "input": {"product": "grok"},
+     "error": "the tool could not update, so it failed", "latency_ms": 5000},
+    {"type": "llm_call", "name": "write_answer", "input": "How much is the Grok subscription?",
+     "output": "The Grok subscription is $15 a month.", "latency_ms": 1200}
+  ],
+  "model": "llama3.2",
+  "tokens": 1850,
+  "cost_usd": 0.004,
+  "latency_ms": 6550
+}

@@ -1,0 +1,7 @@
+id: execution_success
+name: Execution success
+description: Did every step the agent took (tool calls, retrievals, model calls) work without an error?
+area: Agent capabilities
+method: code
+check: steps_succeeded
+threshold: 1.0   # every step must work

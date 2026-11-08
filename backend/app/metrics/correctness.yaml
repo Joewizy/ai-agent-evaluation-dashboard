@@ -1,0 +1,10 @@
+id: correctness
+name: Correct answer
+description: Does the answer match the answer key? The judge splits both into claims, checks the answer's claims against the key (wrong or extra) and the key's claims against the answer (left out). Score is F1.
+area: Agent behaviour
+method: llm_judge
+check: matches_answer_key
+modes: [testing]   # only testing runs have an answer key
+threshold: 1.0
+settings:
+  judge_model: qwen3:8b
