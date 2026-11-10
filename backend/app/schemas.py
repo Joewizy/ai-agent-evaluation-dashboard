@@ -89,7 +89,11 @@ class Evidence(BaseModel):
     """One piece of the 'why': usually one claim and whether it held up."""
 
     item: str = Field(description="The claim, requirement or step being judged")
-    verdict: Literal["passed", "failed", "missing"]
+    verdict: Literal["passed", "failed", "missing", "left_out", "key_contradicted"] = Field(
+        description="missing = the reference says nothing about this claim. "
+        "left_out = this fact is in the answer key but not in the answer. "
+        "key_contradicted = this fact is in the answer key and the answer says otherwise"
+    )
     source: str | None = Field(None, description="What it was checked against, e.g. the policy sentence")
     note: str | None = None
 
@@ -117,21 +121,21 @@ class MetricResult(BaseModel):
     evaluated_at: datetime
 
 
-# ---------- Diagnosis (see docs/DIAGNOSIS_DESIGN.md) ----------
+# ---------- Diagnosis (see notes/design.md) ----------
 
 
 class Ref(BaseModel):
     """Where to look in the run."""
 
-    kind: Literal["step", "context", "output", "metric_result"]
+    kind: Literal["step", "context", "output", "expected_output", "metric_result"]
     id: str = Field(description="Step name, context number, or metric id")
-    detail: str | None = Field(None, description="e.g. the claim text")
+    detail: str | None = Field(None, description="e.g. the claim text, or 'step 2' when a step name repeats")
 
 
 class Observation(BaseModel):
     """Something we saw, and how we know it."""
 
-    id: str = Field(description="Stable id, e.g. 'step-get_latest_prices-error'. Explanations refer to this")
+    id: str = Field(description="Stable id, e.g. 'step-2-get_latest_prices-error'. Explanations refer to this")
     text: str
     basis: Literal["recorded", "computed", "judged"] = Field(
         description="recorded = as the agent sent it, not checked by us. "

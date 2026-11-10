@@ -28,7 +28,7 @@ def fake_judge(monkeypatch, answer_claims, key_claims, answer_verdicts, key_verd
     def ask(prompt, shape, model=None):
         if "claims" in shape["properties"]:
             return {"claims": next(splits)}
-        return {"verdicts": next(checks)}
+        return {"verdicts": [{**v, "claim_id": number} for number, v in enumerate(next(checks), start=1)]}
     monkeypatch.setattr(judge, "ask", ask)
 
 
@@ -56,7 +56,7 @@ def test_wrong_extra_and_left_out(monkeypatch):
     assert 'Wrong: "Grok Premium is $15 a month." (the answer key says "Grok Premium is $8 a month.")' in outcome.reason
     assert 'Not in the answer key: "You can cancel anytime."' in outcome.reason
     assert 'Left out: "Premium+ is $40 a month."' in outcome.reason
-    assert outcome.judge_prompt_version == "correctness-v1"
+    assert outcome.judge_prompt_version == "correctness-v2"
 
 
 def test_partly_right_gives_f1(monkeypatch):

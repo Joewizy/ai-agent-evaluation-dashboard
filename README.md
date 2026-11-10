@@ -16,7 +16,7 @@ Built for Citi upStart 2026 (agent evaluation track).
 
 1. **The agent sends a finished run** as plain JSON: the question, the answer, the documents it used (`context`), the steps it took, and optionally tokens, cost and time. No SDK or framework needed.
 2. **Every metric runs on it.** Each result has a score from 0 to 1, pass or fail, a reason in plain words, and evidence: for example, each claim in the answer and the source sentence it was checked against.
-3. **Diagnosis** looks at the failures. It says what was observed and how we know it (reported by the agent, checked by code, or judged by AI), and it never changes the results. It's being built now. For the moment it reports whether anything needs explaining.
+3. **Diagnosis** looks at the failures. It lists what was observed and how we know it (reported by the agent, checked by code, or judged by AI), offers possible explanations with what to check next and who could look, and says so when the evidence can't explain a failure. It never changes the results.
 
 We only observe. We never block or change what the agent does.
 
@@ -37,7 +37,7 @@ Each metric is one YAML file in `backend/app/metrics/`.
 | Speed | Time, scored on a slope from target to limit | code | both |
 | Cost | Cost, scored on a slope from target to limit | code | both |
 | No data leaked | Card numbers, IBANs, emails, phones in the answer | code (with checksums) | both |
-| Backed by sources | Is each claim in the answer supported by the context? | AI judge | both |
+| Backed by sources | Is each claim in the answer supported by what the agent looked up (context, tool and search results)? | AI judge | both |
 | Correct answer | Does the answer match the answer key? (F1 over claims) | AI judge | testing |
 
 If a metric can't be scored, it's **skipped**, never failed. `skipped_because` says why: `missing_data` (the run didn't include what it needs) or `could_not_run` (for example, the AI judge was down).
@@ -48,6 +48,8 @@ Some metrics need a model to read the answer, for example to check that each cla
 
 - It checks small yes-or-no questions one claim at a time, not one big score.
 - Our code checks that every quote the judge gives really appears in the text, so the judge can't make up a source.
+- The judge answers by claim number and our code fills in the claim, so it can't reword one. If it skips a claim, the metric is skipped too.
+- Our code also flags answers that don't hold together, such as a quote about something else. These count against any explanation resting on that verdict and appear as caveats.
 - Every result records which judge model and prompt version produced it.
 - **During development** the judge is a local model run with Ollama (see [Run it](#run-it)). Hosted judges such as Claude or GPT can be added later.
 
@@ -137,7 +139,9 @@ backend/
     checks.py          the Python behind each kind of check
     judge.py           talks to the judge model (one place to swap it)
     personal_data.py   finds and masks card numbers, IBANs, emails, phones
-    diagnose.py        diagnosis stage
+    evidence.py        turns a run and its results into observations
+    judge_checks.py    plain-code checks on the judge's own answers
+    diagnose.py        possible explanations, what to check, and the outcome
     storage.py         SQLite
     metrics/           one YAML file per metric
   tests/
