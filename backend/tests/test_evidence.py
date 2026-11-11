@@ -319,3 +319,22 @@ def test_key_facts_are_only_checked_when_correct_answer_failed(monkeypatch):
     )
     diagnosis = diagnosis_for(steps=[], context=[CLAIM], mode="testing", expected_output=CLAIM)
     assert diagnosis.outcome == "not_needed" and diagnosis.method == "rules"
+
+
+# ---------- Found by the hand-checked cases (backend/hand_checked) ----------
+
+
+def test_quote_matching_ignores_reordered_sentences_and_json_punctuation():
+    from app.checks import quote_is_in
+    prices = "Pricing page: Grok Premium costs $8 per month. Premium+ costs $40 per month."
+    assert quote_is_in("Premium+ costs $40 per month. Grok Premium costs $8 per month.", prices)
+    assert quote_is_in('Arsenal: {"position": 2, "points": 42}', '{"Arsenal": {"position": 2, "points": 42}}')
+    assert not quote_is_in("Premium costs $8 per year.", prices)
+    assert not quote_is_in("Premium+ costs $4 per month.", prices)  # 4 isn't 40
+
+
+def test_related_word_forms_count_as_the_same_subject():
+    from app.judge_checks import quote_problems
+    from app.schemas import Evidence
+    item = Evidence(item="You can withdraw as often as you like.", verdict="failed", source="Withdrawals are allowed up to 3 times a year.")
+    assert quote_problems(item) == []

@@ -31,6 +31,15 @@ def subject_words(text: str) -> set[str]:
     return {stem for stem in stems if stem and stem not in IGNORED_WORDS}
 
 
+def same_word(a: str, b: str) -> bool:
+    """'withdraw' and 'withdrawals' count as the same word. Short words must match exactly."""
+    return a == b or (min(len(a), len(b)) >= 4 and (a.startswith(b) or b.startswith(a)))
+
+
+def shares_a_word(first: set[str], second: set[str]) -> bool:
+    return any(same_word(a, b) for a in first for b in second)
+
+
 def numbers_in(text: str) -> set[str]:
     return {number.replace(",", "") for number in re.findall(r"\d+(?:[.,]\d+)*", text)}
 
@@ -41,7 +50,7 @@ def quote_problems(evidence: Evidence) -> list[tuple[str, str]]:
     if evidence.verdict == "failed":
         # Values differ in a real contradiction ($15 vs $8), so only the subject has to match.
         claim, quoted = subject_words(evidence.item), subject_words(quote)
-        if claim and quoted and not claim & quoted:
+        if claim and quoted and not shares_a_word(claim, quoted):
             return [("quote-off-topic", f'The judge\'s quote "{quote}" shares no words with the claim "{evidence.item}", apart from numbers, dates and units.')]
     if evidence.verdict == "passed":
         absent = sorted(numbers_in(evidence.item) - numbers_in(quote))

@@ -17,6 +17,31 @@ Built for Citi upStart 2026 (agent evaluation track).
 1. **The agent sends a finished run** as plain JSON: the question, the answer, the documents it used (`context`), the steps it took, and optionally tokens, cost and time. No SDK or framework needed.
 2. **Every metric runs on it.** Each result has a score from 0 to 1, pass or fail, a reason in plain words, and evidence: for example, each claim in the answer and the source sentence it was checked against.
 3. **Diagnosis** looks at the failures. It lists what was observed and how we know it (reported by the agent, checked by code, or judged by AI), offers possible explanations with what to check next and who could look, and says so when the evidence can't explain a failure. It never changes the results.
+4. **Human review.** A person marks each failed result, and each explanation, as correct, incorrect or inconclusive, then records the action taken. Reviews are stored next to the results, never over them.
+
+`POST /runs` replies straight away (`202`, status `evaluating`); scoring happens in the background, one run at a time. Runs left waiting when the server stopped are evaluated when it starts again.
+
+The full flow, including where each judge is called: [docs/system-flow.md](docs/system-flow.md).
+
+### Status of a run
+
+```
+evaluating ─► passed
+          ├─► could_not_run   nothing failed, but a metric couldn't run (e.g. judge down): not a pass
+          └─► needs_review ─► confirmed ─► resolved   (action recorded)
+                          └─► false_alarm             (a person said every failure was wrong)
+```
+
+### Endpoints
+
+| Endpoint | What it's for |
+|---|---|
+| `POST /runs` | An agent sends a finished run. Poll `GET /runs/{id}` every 5–10 s, or add `?wait=true` to get the full result in one call |
+| `GET /runs?since=&agent=&status=` | Runs since this morning (default), e.g. `status=needs_review` is the review queue |
+| `GET /runs/{id}` | One run's full lineage: run, results, diagnosis, reviews, resolution |
+| `POST /runs/{id}/reviews` | `{"target": "metric_result", "metric_id": "groundedness", "verdict": "correct", "reviewer": "sam"}`, or `"target": "explanation", "explanation": 0` |
+| `POST /runs/{id}/resolution` | `{"action": "Raised the tool timeout", "resolved_by": "ana"}`, for confirmed failures |
+| `GET /summary?since=&agent=` | Runs by status and agent, each metric's average (skipped runs left out), failures by cause, pending reviews, and how often people agree with the judge and with the explanations |
 
 We only observe. We never block or change what the agent does.
 
@@ -50,6 +75,7 @@ Some metrics need a model to read the answer, for example to check that each cla
 - Our code checks that every quote the judge gives really appears in the text, so the judge can't make up a source.
 - The judge answers by claim number and our code fills in the claim, so it can't reword one. If it skips a claim, the metric is skipped too.
 - Our code also flags answers that don't hold together, such as a quote about something else. These count against any explanation resting on that verdict and appear as caveats.
+- **Second opinion:** when a failed run's explanation rests on the judge's opinion, a second model (`gemma3:4b`) re-checks just those claims. If one says a claim is supported and the other doesn't, that explanation is set aside. Every re-check is stored. The first judge is unloaded before the second loads, so they're never in memory together.
 - Every result records which judge model and prompt version produced it.
 - **During development** the judge is a local model run with Ollama (see [Run it](#run-it)). Hosted judges such as Claude or GPT can be added later.
 
@@ -83,7 +109,7 @@ curl -X POST localhost:8000/runs -H 'Content-Type: application/json' -d '{
 }'
 ```
 
-The "Backed by sources" result:
+It replies with the run id and status `evaluating`. A moment later, `GET /runs/{id}` has the "Backed by sources" result:
 
 ```json
 {
@@ -114,7 +140,10 @@ pytest                           # tests use a fake judge, so they don't need Ol
 
 ```bash
 ollama pull qwen3:8b     # default judge, about 5 GB
+ollama pull gemma3:4b    # second opinion, about 3.4 GB
 ```
+
+- **No second opinion:** start the server with `SECOND_JUDGE_MODEL= uvicorn app.main:app --reload` (empty turns it off). Without `gemma3:4b` pulled, runs still work; the diagnosis says the second opinion couldn't run.
 
 - **Without it, everything else still works.** Those two metrics are skipped with the reason "couldn't reach Ollama" (`could_not_run`), never marked as passed.
 - **Different model:** start the server with `JUDGE_MODEL=llama3.2 uvicorn app.main:app --reload`. Smaller models are faster but less reliable judges.
@@ -141,8 +170,10 @@ backend/
     personal_data.py   finds and masks card numbers, IBANs, emails, phones
     evidence.py        turns a run and its results into observations
     judge_checks.py    plain-code checks on the judge's own answers
+    second_opinion.py  a second model re-checks the claims an explanation rests on
     diagnose.py        possible explanations, what to check, and the outcome
-    storage.py         SQLite
+    review.py          run status, the review rules and the summary
+    storage.py         SQLite (nothing is ever updated, only added)
     metrics/           one YAML file per metric
   tests/
 frontend/              Next.js dashboard (to come)

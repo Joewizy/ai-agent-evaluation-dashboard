@@ -1,9 +1,11 @@
 """The shapes of the data the backend works with.
 
-Three main things:
+The main things:
   Run           - what the agent did (sent to us by the agent)
   Metric        - a question we ask about every run
   MetricResult  - one metric's answer for one run, with the reason
+  Diagnosis     - what the evidence shows and what might explain a failure
+  Review        - a person's verdict on a metric result or an explanation
 
 FastAPI uses these to check incoming requests and to build the API docs at /docs.
 """
@@ -211,9 +213,116 @@ class Diagnosis(BaseModel):
         return self
 
 
+# ---------- Human review and status (Phase 2) ----------
+
+ReviewVerdict = Literal["correct", "incorrect", "inconclusive"]
+
+RunStatus = Literal["evaluating", "passed", "could_not_run", "needs_review", "confirmed", "false_alarm", "resolved"]
+"""evaluating = not scored yet. passed = nothing failed and everything ran.
+could_not_run = nothing failed, but a metric couldn't run (e.g. the judge was down): neither a pass nor a fail.
+needs_review = something failed and a person hasn't checked every failed metric yet.
+confirmed = a person agreed at least one failure is real. false_alarm = a person said every failure was wrong.
+resolved = someone recorded the action taken."""
+
+
+class ReviewIn(BaseModel):
+    """A person's verdict on one metric result or one explanation. Two levels, kept apart:
+    "was the metric right?" measures the judge; "was the explanation right or useful?" measures the diagnosis."""
+
+    target: Literal["metric_result", "explanation"]
+    metric_id: str | None = Field(None, description="Which metric result, when target is metric_result")
+    explanation: int | None = Field(None, ge=0, description="Which explanation (its position in the diagnosis), when target is explanation")
+    verdict: ReviewVerdict
+    note: str | None = Field(None, description="Why, in a sentence")
+    reviewer: str
+
+    @model_validator(mode="after")
+    def names_its_target(self):
+        if self.target == "metric_result" and (self.metric_id is None or self.explanation is not None):
+            raise ValueError("a metric_result review needs metric_id (and no explanation)")
+        if self.target == "explanation" and (self.explanation is None or self.metric_id is not None):
+            raise ValueError("an explanation review needs explanation (and no metric_id)")
+        return self
+
+
+class Review(ReviewIn):
+    """Stored next to what it reviews, never over it. A later review of the same thing takes precedence."""
+
+    id: str
+    run_id: str
+    reviewed_at: datetime
+
+
+class ResolutionIn(BaseModel):
+    action: str = Field(description="What was done, e.g. 'Fixed the price tool timeout'")
+    resolved_by: str
+
+
+class Resolution(ResolutionIn):
+    run_id: str
+    resolved_at: datetime
+
+
 class RunReport(BaseModel):
-    """What POST /runs and GET /runs/{id} return: the run, every metric's result, and the diagnosis."""
+    """What POST /runs and GET /runs/{id} return: the run, every metric's result, the diagnosis, and its review."""
 
     run: Run
+    status: RunStatus
     results: list[MetricResult]
-    diagnosis: Diagnosis | None = Field(None, description="None for runs stored before diagnosis existed")
+    diagnosis: Diagnosis | None = Field(None, description="None while evaluating, and for runs stored before diagnosis existed")
+    reviews: list[Review] = Field(default_factory=list)
+    resolution: Resolution | None = None
+
+
+class RunRow(BaseModel):
+    """One line in the run list."""
+
+    id: str
+    agent_name: str
+    mode: RunMode
+    received_at: datetime
+    status: RunStatus
+    failed_metrics: list[str]
+    causes: list[str] = Field(description="Explanation patterns, or 'no_explanation' when a failure has none")
+
+
+class ReviewCount(BaseModel):
+    correct: int = 0
+    incorrect: int = 0
+    inconclusive: int = 0
+    agreement: float | None = Field(None, description="correct / (correct + incorrect); inconclusive left out. None if nothing reviewed")
+
+
+class MetricSummary(BaseModel):
+    name: str
+    scored: int = 0
+    failed: int = 0
+    missing_data: int = 0
+    could_not_run: int = Field(0, description="Shown separately and left out of the average: neither a pass nor a fail")
+    average_score: float | None = None
+
+
+class AgentSummary(BaseModel):
+    runs: int = 0
+    failed: int = 0
+    could_not_run: int = 0
+
+
+class Summary(BaseModel):
+    """GET /summary: what happened since a point in time (this morning by default)."""
+
+    since: datetime
+    runs: int
+    by_status: dict[str, int]
+    by_agent: dict[str, AgentSummary]
+    metrics: dict[str, MetricSummary]
+    failed_runs: int = Field(description="Runs where at least one metric failed. The total to show next to the causes")
+    failures_by_cause: dict[str, int] = Field(
+        description="Failed runs per POSSIBLE cause (explanation pattern; 'no_explanation' when nothing explains it). "
+        "A run with two possible causes counts under both, so these can add up to more than failed_runs. "
+        "Show them as 'runs where this was a possible cause', not as shares of a whole"
+    )
+    runs_with_several_causes: int = Field(description="Failed runs counted under more than one cause, so the overlap can be stated")
+    pending_reviews: int
+    judge_vs_humans: ReviewCount = Field(description="Reviews of AI-judged metric results: how often people agreed with the judge")
+    explanations_reviewed: ReviewCount = Field(description="Reviews of explanations: how often people found them right or useful")

@@ -24,17 +24,21 @@ def use_temp_database(tmp_path, monkeypatch):
 
 def test_send_a_run_and_read_it_back():
     response = client.post("/runs", json=card_question)
-    assert response.status_code == 201
-    report = response.json()
-    assert report["run"]["id"]
-    assert report["run"]["mode"] == "live"
-    assert {result["metric_id"] for result in report["results"]} == {"cost", "data_leakage", "execution_success", "groundedness", "latency"}
+    assert response.status_code == 202  # replies before evaluating
+    sent = response.json()
+    assert sent["run"]["id"]
+    assert sent["run"]["mode"] == "live"
+    assert sent["status"] == "evaluating"
+    assert sent["results"] == [] and sent["diagnosis"] is None
 
-    assert report["diagnosis"]["outcome"] == "not_needed"  # nothing failed; cost and groundedness were skipped for missing data
-
-    response = client.get(f"/runs/{report['run']['id']}")
+    # The test client finishes background work before returning, so it's evaluated by now.
+    response = client.get(f"/runs/{sent['run']['id']}")
     assert response.status_code == 200
-    assert response.json() == report
+    report = response.json()
+    assert report["run"] == sent["run"]
+    assert {result["metric_id"] for result in report["results"]} == {"cost", "data_leakage", "execution_success", "groundedness", "latency"}
+    assert report["diagnosis"]["outcome"] == "not_needed"  # nothing failed; cost and groundedness were skipped for missing data
+    assert report["status"] == "passed"
 
 
 def test_testing_run_without_expected_answer_is_rejected():

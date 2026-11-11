@@ -23,8 +23,9 @@ from app.evidence import (
     step_order_id,
 )
 from app.schemas import Diagnosis, Evidence, Explanation, MetricResult, Run
+from app.second_opinion import SecondOpinions, get_second_opinions
 
-DIAGNOSIS_VERSION = "diagnosis-v2"
+DIAGNOSIS_VERSION = "diagnosis-v3"   # v3: selective second opinion
 
 
 def diagnose(run: Run, results: list[MetricResult]) -> Diagnosis:
@@ -37,11 +38,17 @@ def diagnose(run: Run, results: list[MetricResult]) -> Diagnosis:
     known = {observation.id for observation in observations}
     explanations = explain(run, results, key_facts, known) if failed else []
 
+    # A different model re-checks the judged claims the explanations rest on. A lead resting on a
+    # claim the judges disagree about is set aside; leads resting only on other evidence stay.
+    opinions = get_second_opinions(run, results, key_facts, observations, explanations) if explanations else SecondOpinions()
+    explanations = [e for e in explanations if not opinions.disputed & set(e.supported_by)]
+
     caveats = [f"'{result.metric_id}' couldn't run: {result.skipped_reason}." for result in could_not_run]
     caveats += [f"'{result.metric_id}' skipped, missing data: {result.skipped_reason}." for result in missing_data]
     caveats += [f"Judge check: {observation.text}" for observation in observations if is_judge_problem(observation.id)]
     if key_facts.caveat:
         caveats.append(key_facts.caveat)
+    caveats += opinions.caveats
 
     # Skipped isn't passed: if a metric couldn't run, we can't say nothing went wrong.
     if explanations:
@@ -57,7 +64,8 @@ def diagnose(run: Run, results: list[MetricResult]) -> Diagnosis:
         observations=observations,
         explanations=explanations,
         caveats=caveats,
-        method="rules+judge" if key_facts.facts else "rules",
+        second_opinions=opinions.records,
+        method="rules+judge" if key_facts.facts or opinions.records else "rules",
         version=DIAGNOSIS_VERSION,
         diagnosed_at=datetime.now(timezone.utc),
     )

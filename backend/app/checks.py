@@ -150,10 +150,21 @@ def simplify(text: str) -> str:
 SOURCE_LABEL = re.compile(r"^\s*\[(context \d+|tool call '[^']*'|retrieval '[^']*'|answer key|answer)\]", re.IGNORECASE)
 
 
+def words_only(text: str) -> str:
+    """Lowercase words, numbers and currency signs, one space apart. Punctuation and JSON quoting drop out."""
+    return " ".join(re.findall(r"[^\W_]+|[%€$£+]", text.lower()))
+
+
 def quote_is_in(quote: str, text: str) -> bool:
-    """Does the judge's quote appear in this text, ignoring case, spacing and any label it copied?"""
-    wanted = simplify(SOURCE_LABEL.sub(" ", quote))
-    return bool(wanted) and wanted in simplify(text)
+    """Does the judge's quote appear in this text?
+
+    Each sentence of the quote must appear word for word, ignoring case, punctuation and any label it
+    copied. Sentences may come in any order, since judges often quote two sentences the other way round.
+    """
+    sentences = [words_only(sentence) for sentence in re.split(r"(?<=[.!?])\s+", SOURCE_LABEL.sub(" ", quote))]
+    sentences = [sentence for sentence in sentences if sentence]
+    target = f" {words_only(text)} "
+    return bool(sentences) and all(f" {sentence} " in target for sentence in sentences)
 
 
 def split_claims(text: str, model: str) -> list[str]:

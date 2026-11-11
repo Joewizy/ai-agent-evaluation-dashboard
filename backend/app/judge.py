@@ -10,6 +10,7 @@ import httpx
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 DEFAULT_MODEL = "qwen3:8b"
+SECOND_MODEL = "gemma3:4b"
 
 
 def pick_model(metric_choice: str | None) -> str:
@@ -18,6 +19,19 @@ def pick_model(metric_choice: str | None) -> str:
     So someone with a smaller laptop can run JUDGE_MODEL=llama3.2 without editing every metric file.
     """
     return os.environ.get("JUDGE_MODEL") or metric_choice or DEFAULT_MODEL
+
+
+def pick_second_model() -> str | None:
+    """The model that gives a second opinion. SECOND_JUDGE_MODEL wins; set it empty to turn second opinions off."""
+    return os.environ.get("SECOND_JUDGE_MODEL", SECOND_MODEL) or None
+
+
+def unload(model: str) -> None:
+    """Free a model's memory now instead of after Ollama's usual 5 minutes, so two judges never sit in RAM together."""
+    try:
+        httpx.post(f"{OLLAMA_URL}/api/generate", json={"model": model, "keep_alive": 0}, timeout=60)
+    except httpx.HTTPError:
+        pass  # if Ollama is unreachable, nothing is loaded anyway
 
 
 class JudgeError(Exception):
