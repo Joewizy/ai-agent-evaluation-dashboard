@@ -41,6 +41,7 @@ evaluating ─► passed
 | `GET /runs/{id}` | One run's full lineage: run, results, diagnosis, reviews, resolution |
 | `POST /runs/{id}/reviews` | `{"target": "metric_result", "metric_id": "groundedness", "verdict": "correct", "reviewer": "sam"}`, or `"target": "explanation", "explanation": 0` |
 | `POST /runs/{id}/resolution` | `{"action": "Raised the tool timeout", "resolved_by": "ana"}`, for confirmed failures |
+| `GET /metrics` | Each metric's name, description, and whether code or an AI judge checks it |
 | `GET /summary?since=&agent=` | Runs by status and agent, each metric's average (skipped runs left out), failures by cause, pending reviews, and how often people agree with the judge and with the explanations |
 
 We only observe. We never block or change what the agent does.
@@ -149,13 +150,18 @@ ollama pull gemma3:4b    # second opinion, about 3.4 GB
 - **Different model:** start the server with `JUDGE_MODEL=llama3.2 uvicorn app.main:app --reload`. Smaller models are faster but less reliable judges.
 - **Someone else's Ollama:** start the server with `OLLAMA_URL=http://<their-ip>:11434 uvicorn app.main:app --reload`. Run data is sent to their machine, so only do this on a network you trust.
 
-**Frontend** (Next.js, default template for now):
+**Dashboard** (Next.js 16, Tailwind 4):
 
 ```bash
 cd frontend
 npm install
-npm run dev                       # http://localhost:3000
+npm run dev                       # http://localhost:3000, with the backend running on :8000
 ```
+
+- **Today** (`/`): runs since midnight, failures by possible cause, actions taken, checks, reviewer agreement, by agent. Refreshes every 5 s while open.
+- **Runs** (`/runs?status=needs_review&agent=`): the review queue and every other status.
+- **One run** (`/runs/{id}`): the full lineage, from question to possible explanations, with the review pinned beside it. Refreshes only while the run is being scored.
+- The browser calls `/api/*`, which Next.js forwards to the backend (`BACKEND_URL`, default `http://localhost:8000`). Status always comes from the API; the dashboard never works it out itself.
 
 ## Project layout
 
@@ -176,6 +182,9 @@ backend/
     storage.py         SQLite (nothing is ever updated, only added)
     metrics/           one YAML file per metric
   tests/
-frontend/              Next.js dashboard (to come)
+frontend/
+  src/app/             routes: / (Today), /runs, /runs/[id]
+  src/components/      the screens and shared pieces (status chips, evidence badges)
+  src/lib/             typed API client, labels, polling hook
 scripts/compare/       the same sample run evaluated with DeepEval and Arize Phoenix, for comparison
 ```

@@ -85,7 +85,8 @@ def test_grok_worked_example(monkeypatch):
 
     quote = observation(diagnosis, "groundedness-claim-1-quote-found")
     assert quote.basis == "computed"
-    assert "appears in context 1" in quote.text
+    assert "is in context 1, word for word" in quote.text
+    assert quote.match == "exact"
     assert quote.refs[1].kind == "context" and quote.refs[1].id == "1"
     assert "supports" not in quote.text  # a quote match is never presented as proof
 
@@ -325,7 +326,7 @@ def test_key_facts_are_only_checked_when_correct_answer_failed(monkeypatch):
 
 
 def test_quote_matching_ignores_reordered_sentences_and_json_punctuation():
-    from app.checks import quote_is_in
+    from app.quotes import quote_is_in
     prices = "Pricing page: Grok Premium costs $8 per month. Premium+ costs $40 per month."
     assert quote_is_in("Premium+ costs $40 per month. Grok Premium costs $8 per month.", prices)
     assert quote_is_in('Arsenal: {"position": 2, "points": 42}', '{"Arsenal": {"position": 2, "points": 42}}')
@@ -338,3 +339,12 @@ def test_related_word_forms_count_as_the_same_subject():
     from app.schemas import Evidence
     item = Evidence(item="You can withdraw as often as you like.", verdict="failed", source="Withdrawals are allowed up to 3 times a year.")
     assert quote_problems(item) == []
+
+
+def test_a_quote_from_the_agents_instructions_points_to_them(monkeypatch):
+    rules = "You are a pricing assistant for Grok plans."
+    fake_judge(monkeypatch, sources=[verdict(CLAIM, "supported", rules)])
+    diagnosis = diagnosis_for(instructions=rules)
+    quote = observation(diagnosis, "groundedness-claim-1-quote-found")
+    assert quote.refs[1].kind == "instructions"
+    assert "is in the agent's instructions, word for word" in quote.text

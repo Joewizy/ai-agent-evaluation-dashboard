@@ -5,10 +5,10 @@ from datetime import datetime
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Response
 
-from app import review, storage
+from app import judge, review, storage
 from app.diagnose import diagnose
-from app.evaluate import evaluate
-from app.schemas import Resolution, ResolutionIn, Review, ReviewIn, RunIn, RunReport, RunRow, RunStatus, Summary
+from app.evaluate import evaluate, load_metrics
+from app.schemas import MetricInfo, Resolution, ResolutionIn, Review, ReviewIn, RunIn, RunReport, RunRow, RunStatus, Summary
 
 log = logging.getLogger(__name__)
 
@@ -116,6 +116,22 @@ def resolve(run_id: str, resolution_in: ResolutionIn):
     if resolution is None:
         raise HTTPException(status_code=409, detail="this run is already resolved")
     return resolution
+
+
+@app.get("/metrics", response_model=list[MetricInfo])
+def list_metrics():
+    """Every metric: its name, what it checks, and whether code or an AI judge checks it."""
+    return [
+        MetricInfo(
+            id=metric.id,
+            name=metric.name,
+            description=metric.description,
+            method=metric.method,
+            judge_model=judge.pick_model(metric.settings.get("judge_model")) if metric.method == "llm_judge" else None,
+        )
+        for metric in load_metrics()
+        if metric.enabled
+    ]
 
 
 @app.get("/summary", response_model=Summary)

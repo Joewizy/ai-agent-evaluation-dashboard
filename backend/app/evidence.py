@@ -13,7 +13,8 @@ The ids are built from positions in the run and its results, which never change,
 from dataclasses import dataclass, field
 
 from app import checks, judge
-from app.checks import quote_is_in, tool_results
+from app.checks import tool_results
+from app.quotes import find_quote
 from app.judge_checks import answer_problems, quote_problems
 from app.schemas import Evidence, MetricResult, Observation, Ref, Run, Step
 
@@ -137,7 +138,8 @@ def places_to_look(run: Run, metric_id: str) -> list[tuple[str, Ref, str]]:
         return [("the answer key", Ref(kind="expected_output", id="expected_output"), run.expected_output)]
     if metric_id not in ("groundedness", KEY_FACTS):
         return []
-    places = [
+    places = [("the agent's instructions", Ref(kind="instructions", id="instructions"), run.instructions)] if run.instructions else []
+    places += [
         (f"context {number}", Ref(kind="context", id=str(number)), text)
         for number, text in enumerate(run.context, start=1)
     ]
@@ -189,12 +191,20 @@ def claim_text(evidence: Evidence, reference: str, noun: str) -> str:
 
 def quote_observation(run: Run, metric_id: str, number: int, quote: str, reference: str, claim_ref: Ref) -> Observation:
     for name, place, text in places_to_look(run, metric_id):
-        if quote_is_in(quote, text):
+        found = find_quote(quote, text)
+        if found:
+            how = (
+                "word for word (ignoring case and spacing)"
+                if found == "exact"
+                else "reworded: the same names and numbers are in one record, but not in these words"
+            )
+            # This observation records only that the quotation exists. Whether it supports the claim remains the judge's verdict.
             return Observation(
                 id=quote_found_id(metric_id, number),
-                text=f'The judge\'s quote "{quote}" appears in {name} (ignoring case and spacing).',
+                text=f'The judge\'s quote "{quote}" is in {name}, {how}.',
                 basis="computed",
                 refs=[claim_ref, place],
+                match=found,
             )
     return Observation(
         id=quote_not_found_id(metric_id, number),

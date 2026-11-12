@@ -5,3 +5,4 @@ area: Agent capabilities
 method: code
 check: steps_succeeded
 threshold: 1.0   # every step must work
+review: auto     # the agent recorded the error itself, so a failure is a fact, not an opinion

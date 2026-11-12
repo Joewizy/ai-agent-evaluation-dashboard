@@ -3,9 +3,16 @@
 Status comes from what's stored, it's never stored itself:
   evaluating -> passed / could_not_run / needs_review -> confirmed or false_alarm -> resolved
 
-Only failed metric results decide needs_review / confirmed / false_alarm. A person can still review a
-passed result or an explanation; those reviews feed the judge and diagnosis accuracy numbers.
-The latest review of the same thing counts. "Inconclusive" leaves it waiting for someone else.
+Only failed metric results decide needs_review / confirmed / false_alarm. A metric's YAML says how its failures
+are settled:
+  review: person  an AI judge or a rule that can be wrong decided it, so it waits for a person
+  review: auto    it's a measurement (time, cost, an error the agent recorded), so it's real without a review
+One person-reviewed failure marked correct is enough to confirm (there's a real problem to act on). Otherwise the
+run waits while any person-reviewed failure is unreviewed; then a measured failure confirms it, and if every failure
+was marked incorrect it's a false alarm.
+A person can still review a passed result or an explanation; those reviews feed the judge and diagnosis accuracy
+numbers. Measured results can't be reviewed. The latest review of the same thing counts. "Inconclusive" leaves it
+waiting for someone else.
 """
 
 from collections import Counter, defaultdict
@@ -13,6 +20,7 @@ from datetime import datetime
 
 from app.evaluate import load_metrics
 from app.schemas import (
+    Action,
     AgentSummary,
     MetricSummary,
     Review,
@@ -42,14 +50,22 @@ def status(stored: Stored) -> RunStatus:
         return "evaluating"
     if stored.resolution is not None:
         return "resolved"
-    failed = [result.metric_id for result in stored.results if result.passed is False]
+    failed = [result for result in stored.results if result.passed is False]
     if not failed:
         return "could_not_run" if any(r.skipped_because == "could_not_run" for r in stored.results) else "passed"
     reviewed = latest(stored.reviews)
-    verdicts = [getattr(reviewed.get(("metric_result", metric_id, None)), "verdict", None) for metric_id in failed]
-    if any(verdict in (None, "inconclusive") for verdict in verdicts):
-        return "needs_review"
-    return "confirmed" if "correct" in verdicts else "false_alarm"
+    verdicts = [
+        getattr(reviewed.get(("metric_result", result.metric_id, None)), "verdict", None)
+        for result in failed
+        if result.review == "person"
+    ]
+    if "correct" in verdicts:
+        return "confirmed"  # one real failure is enough to act on
+    if any(verdict != "incorrect" for verdict in verdicts):
+        return "needs_review"  # something a person has to judge is still waiting
+    if any(result.review == "auto" for result in failed):
+        return "confirmed"  # measured, so it's real without a review
+    return "false_alarm"
 
 
 def report(stored: Stored) -> RunReport:
@@ -95,6 +111,8 @@ def review_problem(stored: Stored, review: ReviewIn) -> str | None:
             return f"this run has no result for metric '{review.metric_id}'"
         if result.passed is None:
             return f"metric '{review.metric_id}' was skipped, so there's no result to review"
+        if result.review == "auto":
+            return f"metric '{review.metric_id}' is a measurement, so it's confirmed without a review"
         return None
     count = len(stored.diagnosis.explanations) if stored.diagnosis else 0
     if review.explanation >= count:
@@ -168,6 +186,15 @@ def summarise(runs: list[Stored], since: datetime) -> Summary:
         failures_by_cause=dict(failure_causes.most_common()),
         runs_with_several_causes=several_causes,
         pending_reviews=statuses["needs_review"],
+        actions=sorted(
+            (
+                Action(run_id=s.run.id, agent_name=s.run.agent_name, **s.resolution.model_dump(exclude={"run_id"}))
+                for s in runs
+                if s.resolution
+            ),
+            key=lambda action: action.resolved_at,
+            reverse=True,
+        ),
         judge_vs_humans=count_reviews(judge_reviews),
         explanations_reviewed=count_reviews(explanation_reviews),
     )

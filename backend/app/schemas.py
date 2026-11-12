@@ -35,7 +35,7 @@ class Step(BaseModel):
 class RunIn(BaseModel):
     """What an agent sends to POST /runs once it has finished."""
 
-    agent_name: str
+    agent_name: str = Field(min_length=1, description="Which agent sent the run. Per-agent limits in the metric YAML files use it")
     mode: RunMode = "live"
     conversation_id: str | None = Field(None, description="Groups several runs from one conversation")
 
@@ -43,6 +43,11 @@ class RunIn(BaseModel):
     output: str = Field(description="What the agent answered")
     expected_output: str | None = Field(None, description="The correct answer. Required in testing mode")
     context: list[str] = Field(default_factory=list, description="Documents the agent was given or found")
+    instructions: str | None = Field(
+        None,
+        description="The agent's system prompt and tool descriptions. A source like any other, so what the agent "
+        "says about itself (\"I can look up league tables\") can be checked instead of counted as made up",
+    )
     steps: list[Step] = Field(default_factory=list)
 
     model: str | None = Field(None, description="The model the agent used, e.g. 'gpt-4o' or 'llama3.2'")
@@ -67,6 +72,20 @@ class Run(RunIn):
 
 # ---------- Metric ----------
 
+ReviewMode = Literal["person", "auto"]
+"""How a failed result is confirmed.
+
+person: a reviewer must confirm the failure (metrics decided by an AI judge or by a heuristic rule).
+auto: the failure is a measurement (latency, cost, an error recorded by the agent) and is confirmed without a review."""
+
+
+class AgentOverride(BaseModel):
+    """Changes to a metric for one agent, e.g. a longer time limit for an agent on a local model."""
+
+    enabled: bool | None = None
+    threshold: float | None = Field(None, ge=0, le=1)
+    settings: dict[str, Any] = Field(default_factory=dict, description="Merged over the metric's settings")
+
 
 class Metric(BaseModel):
     """A question we ask about every run. Loaded from a YAML file."""
@@ -82,6 +101,20 @@ class Metric(BaseModel):
     threshold: float = Field(ge=0, le=1, description="Score needed to pass")
     settings: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+    review: ReviewMode = Field("person", description="Whether a failure needs a person's review or is confirmed as measured")
+    per_agent: dict[str, AgentOverride] = Field(default_factory=dict, description="Overrides by agent name")
+
+    def for_agent(self, agent_name: str) -> "Metric":
+        """This metric as it applies to one agent, with that agent's overrides merged in."""
+        override = self.per_agent.get(agent_name)
+        if override is None:
+            return self
+        changes: dict[str, Any] = {"settings": {**self.settings, **override.settings}}
+        if override.enabled is not None:
+            changes["enabled"] = override.enabled
+        if override.threshold is not None:
+            changes["threshold"] = override.threshold
+        return self.model_copy(update=changes)
 
 
 # ---------- Result ----------
@@ -97,6 +130,7 @@ class Evidence(BaseModel):
         "key_contradicted = this fact is in the answer key and the answer says otherwise"
     )
     source: str | None = Field(None, description="What it was checked against, e.g. the policy sentence")
+    found_in: str | None = Field(None, description="Which source our code found the quote in, e.g. 'context 1' or 'agent instructions'")
     note: str | None = None
 
 
@@ -118,6 +152,7 @@ class MetricResult(BaseModel):
     )
 
     method: Literal["code", "llm_judge"]
+    review: ReviewMode = Field("person", description="auto = a failure is a measurement and counts as confirmed without a review")
     judge_model: str | None = Field(None, description="e.g. 'qwen3:8b'. Kept so scores stay comparable")
     judge_prompt_version: str | None = None
     evaluated_at: datetime
@@ -129,7 +164,7 @@ class MetricResult(BaseModel):
 class Ref(BaseModel):
     """Where to look in the run."""
 
-    kind: Literal["step", "context", "output", "expected_output", "metric_result"]
+    kind: Literal["step", "context", "instructions", "output", "expected_output", "metric_result"]
     id: str = Field(description="Step name, context number, or metric id")
     detail: str | None = Field(None, description="e.g. the claim text, or 'step 2' when a step name repeats")
 
@@ -146,6 +181,11 @@ class Observation(BaseModel):
     )
     refs: list[Ref] = Field(default_factory=list)
     judge_model: str | None = Field(None, description="Set when basis is 'judged'")
+    match: Literal["exact", "record"] | None = Field(
+        None,
+        description="For a quote our code found: exact = word for word; record = reworded, but the same names and "
+        "numbers are in one JSON record. Weaker than exact",
+    )
 
     @model_validator(mode="after")
     def judged_needs_a_model(self):
@@ -220,8 +260,9 @@ ReviewVerdict = Literal["correct", "incorrect", "inconclusive"]
 RunStatus = Literal["evaluating", "passed", "could_not_run", "needs_review", "confirmed", "false_alarm", "resolved"]
 """evaluating = not scored yet. passed = nothing failed and everything ran.
 could_not_run = nothing failed, but a metric couldn't run (e.g. the judge was down): neither a pass nor a fail.
-needs_review = something failed and a person hasn't checked every failed metric yet.
-confirmed = a person agreed at least one failure is real. false_alarm = a person said every failure was wrong.
+needs_review = a failure that needs a person (an AI judge or a fallible rule decided it) hasn't been reviewed yet.
+confirmed = at least one failure is real: a person agreed, or it's a measurement (review: auto) and nothing waits for a person.
+false_alarm = a person said every failure was wrong.
 resolved = someone recorded the action taken."""
 
 
@@ -302,6 +343,26 @@ class MetricSummary(BaseModel):
     average_score: float | None = None
 
 
+class Action(BaseModel):
+    """One recorded action, for the "Actions taken" list."""
+
+    run_id: str
+    agent_name: str
+    action: str
+    resolved_by: str
+    resolved_at: datetime
+
+
+class MetricInfo(BaseModel):
+    """GET /metrics: what each metric is called and how it's checked, so the dashboard never shows raw ids."""
+
+    id: str
+    name: str
+    description: str
+    method: Literal["code", "llm_judge"]
+    judge_model: str | None = Field(None, description="The judge this metric uses now, for llm_judge metrics")
+
+
 class AgentSummary(BaseModel):
     runs: int = 0
     failed: int = 0
@@ -324,5 +385,6 @@ class Summary(BaseModel):
     )
     runs_with_several_causes: int = Field(description="Failed runs counted under more than one cause, so the overlap can be stated")
     pending_reviews: int
+    actions: list[Action] = Field(description="Actions recorded on these runs, newest first")
     judge_vs_humans: ReviewCount = Field(description="Reviews of AI-judged metric results: how often people agreed with the judge")
     explanations_reviewed: ReviewCount = Field(description="Reviews of explanations: how often people found them right or useful")

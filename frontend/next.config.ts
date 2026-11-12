@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
+// The FastAPI backend. The browser calls /api/*, and Next.js forwards it here, so there's no CORS to set up.
+const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
+
 const nextConfig: NextConfig = {
-  /* config options here */
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
@@ -11,6 +13,9 @@ const nextConfig: NextConfig = {
         as: "*.css",
       },
     },
+  },
+  async rewrites() {
+    return [{ source: "/api/:path*", destination: `${BACKEND_URL}/:path*` }];
   },
 };
 

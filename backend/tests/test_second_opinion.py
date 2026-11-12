@@ -1,7 +1,7 @@
 """Selective second opinion (step 6), plus the quote fixes found while comparing judges."""
 
 from app import judge
-from app.checks import quote_is_in
+from app.quotes import quote_is_in
 from app.judge_checks import quote_problems
 from app.schemas import Evidence
 from tests.test_evidence import CLAIM, PRICES, by_pattern, diagnosis_for, numbered, verdict

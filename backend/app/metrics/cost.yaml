@@ -5,6 +5,10 @@ area: Agent behaviour
 method: code
 check: within_limit
 threshold: 0.5
+review: auto     # a measured cost: a failure is real without a person's review
+per_agent:
+  football-agent:
+    enabled: false   # runs on a local model, so there's no cost to check
 settings:
   field: cost_usd
   unit: USD

@@ -25,7 +25,7 @@ from app.evidence import (
 from app.schemas import Diagnosis, Evidence, Explanation, MetricResult, Run
 from app.second_opinion import SecondOpinions, get_second_opinions
 
-DIAGNOSIS_VERSION = "diagnosis-v3"   # v3: selective second opinion
+DIAGNOSIS_VERSION = "diagnosis-v5"   # v5: the agent's instructions are a source; found quotes say how they matched
 
 
 def diagnose(run: Run, results: list[MetricResult]) -> Diagnosis:
@@ -92,6 +92,17 @@ def claims_with(result: MetricResult | None, verdict: str) -> list[tuple[int, Ev
     return [(number, evidence) for number, evidence in enumerate(result.evidence, start=1) if evidence.verdict == verdict]
 
 
+def one_check(items: list[Evidence], single: str, many: str) -> list[str]:
+    """A single how-to-check line for a set of claims.
+
+    `single` is used (with the claim text as `item`) when there is one claim; `many` (with the count as `n`)
+    otherwise, since the claims are already listed in the explanation's `supported_by`.
+    """
+    if len(items) == 1:
+        return [single.format(item=items[0].item)]
+    return [many.format(n=len(items))]
+
+
 def quote_support(metric_id: str, number: int, known: set[str]) -> tuple[list[str], list[str]]:
     """What the code checks add to one judged claim, as (ids that back it up, ids that count against it).
 
@@ -109,19 +120,22 @@ def answer_contradicts_context(grounded: MetricResult | None, known: set[str]) -
     if grounded is None or grounded.passed is not False or not contradicted:
         return None
 
-    supported_by, weakened_by, how_to_check = [], [], []
-    for number, evidence in contradicted:
+    supported_by, weakened_by = [], []
+    for number, _ in contradicted:
         found, doubts = quote_support("groundedness", number, known)
         supported_by += [claim_id("groundedness", number), *found]
         weakened_by += doubts
-        how_to_check.append(f'Re-run with the same sources. Does it still say "{evidence.item}"?')
 
     return Explanation(
         summary="The agent may not have used what it looked up.",
         pattern="answer_contradicts_context",
         supported_by=supported_by,
         weakened_by=weakened_by,
-        how_to_check=how_to_check,
+        how_to_check=one_check(
+            [evidence for _, evidence in contradicted],
+            'Re-run with the same sources. Does it still say "{item}"?',
+            "Re-run with the same sources. Does it still make the {n} contradicted claims?",
+        ),
         who_could_look="whoever owns the agent's instructions",
     )
 
@@ -134,22 +148,23 @@ def claim_not_in_context(
         return None
 
     matches_key = {simplify(evidence.item): number for number, evidence in claims_with(correct, "passed")}
-    supported_by, weakened_by, how_to_check = [], [], []
+    supported_by, weakened_by = [], []
     for number, evidence in not_mentioned:
         supported_by.append(claim_id("groundedness", number))
         weakened_by += quote_support("groundedness", number, known)[1]
         if simplify(evidence.item) in matches_key:
             weakened_by.append(claim_id("correctness", matches_key[simplify(evidence.item)]))
-        how_to_check.append(
-            f'Search what the agent looked up for "{evidence.item}". If it\'s there, the judge missed it.'
-        )
 
     return Explanation(
         summary="The agent may have added something that isn't in what it looked up.",
         pattern="claim_not_in_context",
         supported_by=supported_by,
         weakened_by=weakened_by,
-        how_to_check=how_to_check,
+        how_to_check=one_check(
+            [evidence for _, evidence in not_mentioned],
+            'Search what the agent looked up for "{item}". If it\'s there, the judge missed it.',
+            "Search what the agent looked up for each of the {n} claims. If one is there, the judge missed it.",
+        ),
         who_could_look="whoever owns the agent's instructions or its document search",
     )
 
@@ -165,7 +180,7 @@ def context_disagrees_with_answer_key(
         return None
 
     backed_by_sources = {simplify(evidence.item): number for number, evidence in claims_with(grounded, "passed")}
-    supported_by, weakened_by, how_to_check = [], [], []
+    supported_by, weakened_by, disputed = [], [], []
     for number, evidence in claims_with(correct, "failed"):
         source_number = backed_by_sources.get(simplify(evidence.item))
         if source_number is None:
@@ -174,7 +189,7 @@ def context_disagrees_with_answer_key(
         key_found, key_doubts = quote_support("correctness", number, known)
         supported_by += [claim_id("groundedness", source_number), *source_found, claim_id("correctness", number), *key_found]
         weakened_by += source_doubts + key_doubts
-        how_to_check.append(f'Check "{evidence.item}" against the original. Is the source or the answer key out of date?')
+        disputed.append(evidence)
 
     for number, evidence in enumerate(key_facts.facts, start=1):
         if evidence.verdict != "failed":
@@ -182,7 +197,7 @@ def context_disagrees_with_answer_key(
         found, doubts = quote_support(KEY_FACTS, number, known)
         supported_by += [claim_id(KEY_FACTS, number), *found]
         weakened_by += doubts
-        how_to_check.append(f'Check "{evidence.item}" against the original. Is the source or the answer key out of date?')
+        disputed.append(evidence)
 
     if not supported_by:
         return None
@@ -191,20 +206,24 @@ def context_disagrees_with_answer_key(
         pattern="context_disagrees_with_answer_key",
         supported_by=supported_by,
         weakened_by=weakened_by,
-        how_to_check=how_to_check,
+        how_to_check=one_check(
+            disputed,
+            'Check "{item}" against the original. Is the source or the answer key out of date?',
+            "Check the {n} claims against the original. Is the source or the answer key out of date?",
+        ),
         who_could_look="whoever maintains the answer key and the documents",
     )
 
 
 def fact_missing_from_context(key_facts: KeyFactCheck, known: set[str]) -> Explanation | None:
     """A key fact wasn't in what the agent looked up. It doesn't prove search failed."""
-    supported_by, weakened_by, how_to_check = [], [], []
+    supported_by, weakened_by, missing = [], [], []
     for number, evidence in enumerate(key_facts.facts, start=1):
         if evidence.verdict != "missing":
             continue
         supported_by.append(claim_id(KEY_FACTS, number))
         weakened_by += quote_support(KEY_FACTS, number, known)[1]
-        how_to_check.append(f'Look for "{evidence.item}" in the documents. If it\'s there, search or the judge missed it.')
+        missing.append(evidence)
 
     if not supported_by:
         return None
@@ -213,7 +232,11 @@ def fact_missing_from_context(key_facts: KeyFactCheck, known: set[str]) -> Expla
         pattern="fact_missing_from_context",
         supported_by=supported_by,
         weakened_by=weakened_by,
-        how_to_check=how_to_check,
+        how_to_check=one_check(
+            missing,
+            'Look for "{item}" in the documents. If it\'s there, search or the judge missed it.',
+            "Look for the {n} facts in the documents. If one is there, search or the judge missed it.",
+        ),
         who_could_look="whoever owns the agent's document search and documents",
     )
 

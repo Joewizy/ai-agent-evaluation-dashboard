@@ -4,10 +4,16 @@ description: How long the agent took. Full score up to the target, zero at the l
 area: Agent behaviour
 method: code
 check: within_limit
-threshold: 0.5
+threshold: 0.5   # with this line, a run fails halfway between target and limit
+review: auto     # a measured time: a failure is real without a person's review
 settings:
   field: latency_ms
   unit: ms
   label: Took
   target: 3000
   limit: 10000
+per_agent:
+  football-agent:
+    settings:
+      target: 20000
+      limit: 40000   # fails above 30 s

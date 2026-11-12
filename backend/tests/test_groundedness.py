@@ -214,3 +214,69 @@ def test_same_text_in_context_and_retrieval_is_sent_once():
         }
     )
     assert sources_for(run) == [("context 1", grok_run["context"][0])]
+
+
+# ---------- The agent's instructions are a source ----------
+
+FOOTBALL_INSTRUCTIONS = (
+    "You are a football data assistant. Answer using tool results only.\n"
+    "Tools:\n- league_table: the current league table\n- top_scorers: the top scorers of a league"
+)
+
+purpose_run = {
+    **grok_run,
+    "agent_name": "football-agent",
+    "input": "What is your purpose?",
+    "output": "I am a football data assistant. I can show the current league table.",
+    "context": ["The Scottish Premiership contains twelve clubs."],
+    "steps": [],
+    "instructions": FOOTBALL_INSTRUCTIONS,
+}
+
+
+def test_instructions_come_first_in_the_sources():
+    assert sources_for(Run(**purpose_run))[0] == ("agent instructions", FOOTBALL_INSTRUCTIONS)
+    assert all(label != "agent instructions" for label, _ in sources_for(Run(**grok_run)))  # only when sent
+
+
+def test_what_the_agent_says_about_itself_is_backed_by_its_instructions(monkeypatch):
+    """Claims the agent makes about itself are verified against its instructions (system prompt and tool descriptions)."""
+    fake_judge(
+        monkeypatch,
+        claims=["The assistant is a football data assistant.", "The assistant can show the current league table."],
+        verdicts=[
+            verdict("The assistant is a football data assistant.", "supported", "You are a football data assistant."),
+            verdict("The assistant can show the current league table.", "supported", "league_table: the current league table"),
+        ],
+    )
+    outcome = claims_supported(Run(**purpose_run), groundedness)
+    assert outcome.score == 1.0
+    assert [e.found_in for e in outcome.evidence] == ["agent instructions", "agent instructions"]
+    assert "2 of them by the agent's own instructions" in outcome.reason
+
+
+def test_found_in_names_the_source_the_quote_is_in(monkeypatch):
+    fake_judge(
+        monkeypatch,
+        claims=["Premium+ is $40 a month.", "You can cancel anytime."],
+        verdicts=[verdict("Premium+ is $40 a month.", "supported", "Premium+ costs $40 per month."), verdict("You can cancel anytime.", "not_mentioned")],
+    )
+    outcome = claims_supported(Run(**grok_run), groundedness)
+    assert [e.found_in for e in outcome.evidence] == ["context 1", None]
+
+
+def test_a_search_result_already_sent_as_context_is_read_once():
+    """The football agent records search_knowledge as a step and copies its passages into context."""
+    passages = [{"source": "formats.md", "text": "The Scottish Premiership contains twelve clubs."}, {"source": "formats.md", "text": "A win is worth three points."}]
+    run = Run(
+        **{
+            **grok_run,
+            "context": [f"[{p['source']}] {p['text']}" for p in passages],
+            "steps": [
+                {"type": "retrieval", "name": "search_knowledge", "output": passages},
+                {"type": "tool_call", "name": "league_table", "output": [{"team": "Celtic", "points": 31}]},
+            ],
+        }
+    )
+    labels = [label for label, _ in sources_for(run)]
+    assert labels == ["context 1", "context 2", "tool call 'league_table'"]  # the search isn't listed again

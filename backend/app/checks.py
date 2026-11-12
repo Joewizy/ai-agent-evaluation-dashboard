@@ -10,8 +10,10 @@ or a skipped_reason if the run doesn't have what the check needs.
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from app import judge, personal_data
+from app.quotes import quote_is_in
 from app.schemas import Evidence, Metric, Run, Step
 
 
@@ -146,51 +148,51 @@ def simplify(text: str) -> str:
     return " ".join(text.lower().split()).strip(" .\"'")
 
 
-# The labels we put in front of each text in the prompt. The judge sometimes copies one into its quote.
-SOURCE_LABEL = re.compile(r"^\s*\[(context \d+|tool call '[^']*'|retrieval '[^']*'|answer key|answer)\]", re.IGNORECASE)
-
-
-def words_only(text: str) -> str:
-    """Lowercase words, numbers and currency signs, one space apart. Punctuation and JSON quoting drop out."""
-    return " ".join(re.findall(r"[^\W_]+|[%€$£+]", text.lower()))
-
-
-def quote_is_in(quote: str, text: str) -> bool:
-    """Does the judge's quote appear in this text?
-
-    Each sentence of the quote must appear word for word, ignoring case, punctuation and any label it
-    copied. Sentences may come in any order, since judges often quote two sentences the other way round.
-    """
-    sentences = [words_only(sentence) for sentence in re.split(r"(?<=[.!?])\s+", SOURCE_LABEL.sub(" ", quote))]
-    sentences = [sentence for sentence in sentences if sentence]
-    target = f" {words_only(text)} "
-    return bool(sentences) and all(f" {sentence} " in target for sentence in sentences)
-
-
 def split_claims(text: str, model: str) -> list[str]:
     """Ask the judge to split a text into short factual claims."""
     return judge.ask(SPLIT_PROMPT.format(answer=text), CLAIMS_SHAPE, model)["claims"]
 
 
+def already_in_context(output: Any, context: list[str]) -> bool:
+    """True when a search result is a list of passages ({"text": ...}) the agent also sent as `context`.
+
+    Agents often record a search both ways. The passages are then read once, as context, so the judge
+    isn't shown the same text twice and the run page doesn't list it twice.
+    """
+    if not isinstance(output, list) or not output or not context:
+        return False
+    joined = "\n".join(context)
+    texts = [item.get("text") if isinstance(item, dict) else None for item in output]
+    return all(isinstance(text, str) and text.strip() and text in joined for text in texts)
+
+
 def tool_results(run: Run) -> list[tuple[int, Step, str]]:
-    """(position in the run, step, output as text) for every retrieval and tool_call step that worked."""
+    """(position in the run, step, output as text) for every retrieval and tool_call step that worked,
+    leaving out results already sent as context (see already_in_context)."""
     results = []
     for position, step in enumerate(run.steps, start=1):
         if step.type in ("retrieval", "tool_call") and step.output is not None and not step.error:
+            if already_in_context(step.output, run.context):
+                continue
             text = step.output if isinstance(step.output, str) else json.dumps(step.output, ensure_ascii=False)
             results.append((position, step, text))
     return results
 
 
-def sources_for(run: Run) -> list[tuple[str, str]]:
-    """Everything the agent looked up before answering, as (label, text) pairs.
+INSTRUCTIONS = "agent instructions"
 
+
+def sources_for(run: Run) -> list[tuple[str, str]]:
+    """Everything the agent could base its answer on, as (label, text) pairs.
+
+    - its instructions (system prompt and tool descriptions), if it sent them: what it says about itself comes from here
     - every item in `context` (documents the agent sends explicitly)
     - the output of every retrieval and tool_call step that worked (e.g. what an API like lookup_fees returned)
 
     Not included: llm_call outputs (the agent's own writing), output from failed steps, and exact duplicates.
     """
-    sources = [(f"context {number}", text) for number, text in enumerate(run.context, start=1)]
+    sources = [(INSTRUCTIONS, run.instructions)] if run.instructions else []
+    sources += [(f"context {number}", text) for number, text in enumerate(run.context, start=1)]
     for _, step, text in tool_results(run):
         sources.append((f"{step.type.replace('_', ' ')} '{step.name}'", text))
 
@@ -238,7 +240,8 @@ def check_claims(
     for verdict in sorted(verdicts, key=lambda v: v["claim_id"]):
         quote = verdict["quote"].strip()
         note = verdict["reason"]
-        if quote and not any(quote_is_in(quote, text) for _, text in reference):
+        found_in = next((label for label, text in reference if quote_is_in(quote, text)), None) if quote else None
+        if quote and found_in is None:
             made_up_quotes += 1
             note += " (Warning: the judge's quote isn't in the text it was checking against.)"
         evidence.append(
@@ -246,6 +249,7 @@ def check_claims(
                 item=claims[verdict["claim_id"] - 1],
                 verdict={"supported": "passed", "contradicted": "failed", "not_mentioned": "missing"}[verdict["verdict"]],
                 source=quote or None,
+                found_in=found_in,
                 note=note,
             )
         )
@@ -279,14 +283,19 @@ def claims_supported(run: Run, metric: Metric) -> Outcome:
     not_mentioned = [e for e in evidence if e.verdict == "missing"]
     score = len(backed) / len(evidence) if evidence else 0.0
 
+    from_instructions = [e for e in backed if e.found_in == INSTRUCTIONS]
     if not contradicted and not not_mentioned:
         reason = f"All {len(evidence)} claims are backed by the sources."
+        if from_instructions:
+            reason += f" {len(from_instructions)} of them by the agent's own instructions."
     else:
         parts = [f"{len(contradicted) + len(not_mentioned)} of {len(evidence)} claims aren't backed by the sources."]
         for e in contradicted:
             parts.append(f'Contradicted: "{e.item}" (the sources say "{e.source}").')
         for e in not_mentioned:
             parts.append(f'Not in the sources: "{e.item}".')
+        if from_instructions:
+            parts.append(f"{len(from_instructions)} backed claim(s) come from the agent's own instructions.")
         reason = " ".join(parts)
     if made_up_quotes:
         reason += f" Judge check: {made_up_quotes} quote(s) from the judge aren't in the sources, so treat this result with care."

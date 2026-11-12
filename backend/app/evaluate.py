@@ -35,6 +35,7 @@ def applies_to(metric: Metric, run: Run) -> bool:
 def evaluate(run: Run) -> list[MetricResult]:
     results = []
     for metric in load_metrics():
+        metric = metric.for_agent(run.agent_name)
         if not applies_to(metric, run):
             continue
 
@@ -53,6 +54,7 @@ def evaluate(run: Run) -> list[MetricResult]:
                 skipped_reason=outcome.skipped_reason,
                 skipped_because=None if not skipped else ("could_not_run" if outcome.could_not_run else "missing_data"),
                 method=metric.method,
+                review=metric.review,
                 judge_model=outcome.judge_model,
                 judge_prompt_version=outcome.judge_prompt_version,
                 evaluated_at=datetime.now(timezone.utc),
