@@ -1,3 +1,4 @@
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, Inter, Newsreader } from "next/font/google";
 import { Suspense } from "react";
@@ -28,6 +29,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <Header />
         </Suspense>
         {children}
+        <SpeedInsights />
       </body>
     </html>
   );
