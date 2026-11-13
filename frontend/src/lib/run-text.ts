@@ -8,7 +8,7 @@ export interface Claim {
   judgeModel: string | null;
 }
 
-/** Claims the judge checked against the sources ("Backed by sources"), in order. */
+/** Claims the judge checked against the sources ("Grounded"), in order. */
 export function claimsOf(results: MetricResult[]): Claim[] {
   const grounded = results.find((r) => r.metric_id === "groundedness");
   if (!grounded) return [];
@@ -40,6 +40,21 @@ function contentWords(text: string): Set<string> {
     if (word.length >= 2 && !STOP_WORDS.has(word)) words.add(word);
   }
   return words;
+}
+
+/**
+ * Where, in one sentence of the answer, the unsupported claims say something the supported ones don't.
+ * "Camilo ranks 1st in the league table" next to "Camilo plays for Celtic" adds "ranks 1st league table";
+ * of those, only "1st" is in "Camilo (Celtic, 1st)", so only "1st" is marked. Offsets are within the sentence.
+ */
+export function distinctSpans(sentence: string, unsupported: string[], supported: string[]): { start: number; end: number }[] {
+  const known = new Set(supported.flatMap((claim) => [...contentWords(claim)]));
+  const extra = new Set(unsupported.flatMap((claim) => [...contentWords(claim)].filter((w) => !known.has(w) && w !== "assistant")));
+  const spans: { start: number; end: number }[] = [];
+  for (const match of sentence.matchAll(/[\p{L}\p{N}]+/gu)) {
+    if (extra.has(match[0].toLowerCase())) spans.push({ start: match.index ?? 0, end: (match.index ?? 0) + match[0].length });
+  }
+  return spans;
 }
 
 /** Sentence ranges of a text: split after . ! ? followed by whitespace, and at line breaks. */
@@ -109,31 +124,38 @@ export function boldRuns(text: string): { text: string; bold: boolean }[] {
     .filter((run) => run.text);
 }
 
-/** The first sentence of a reason, e.g. "4 of 10 claims aren't backed by the sources." */
+/** The first sentence of a reason, e.g. "4 of 10 claims aren't supported by the sources." */
 export function firstSentence(text: string): string {
   const match = /^.*?[.!?](?=\s|$)/.exec(text);
   return match ? match[0] : text;
 }
 
+export interface HighlightPart {
+  text: string;
+  hl: boolean;
+  /** The quote this part matches, so the page can find a quote's mark again. */
+  quote?: string;
+}
+
 /** Split text into plain and highlighted parts wherever one of the quotes appears (ignoring case). */
-export function highlight(text: string, quotes: string[]): { text: string; hl: boolean }[] {
+export function highlight(text: string, quotes: string[]): HighlightPart[] {
   const lower = text.toLowerCase();
-  const ranges: [number, number][] = [];
+  const ranges: [number, number, string][] = [];
   for (const quote of quotes) {
     const needle = quote.trim().toLowerCase();
     if (needle.length < 3) continue;
     for (let at = lower.indexOf(needle); at >= 0; at = lower.indexOf(needle, at + needle.length)) {
-      ranges.push([at, at + needle.length]);
+      ranges.push([at, at + needle.length, quote]);
     }
   }
   ranges.sort((a, b) => a[0] - b[0]);
-  const parts: { text: string; hl: boolean }[] = [];
+  const parts: HighlightPart[] = [];
   let cursor = 0;
-  for (const [start, end] of ranges) {
+  for (const [start, end, quote] of ranges) {
     if (end <= cursor) continue;
     const from = Math.max(start, cursor);
     if (from > cursor) parts.push({ text: text.slice(cursor, from), hl: false });
-    parts.push({ text: text.slice(from, end), hl: true });
+    parts.push({ text: text.slice(from, end), hl: true, quote });
     cursor = end;
   }
   if (cursor < text.length) parts.push({ text: text.slice(cursor), hl: false });
@@ -172,8 +194,32 @@ export interface Source {
   empty?: boolean;
 }
 
+export interface Span {
+  start: number;
+  end: number;
+}
+
+/** Split a slice of the answer that starts at `offset` into runs, marking the characters that fall inside any span. */
+export function markSpans(text: string, offset: number, spans: Span[]): { text: string; marked: boolean }[] {
+  const ranges = spans
+    .map(({ start, end }) => [Math.max(0, start - offset), Math.min(text.length, end - offset)] as const)
+    .filter(([start, end]) => end > start)
+    .sort((a, b) => a[0] - b[0]);
+  const parts: { text: string; marked: boolean }[] = [];
+  let cursor = 0;
+  for (const [start, end] of ranges) {
+    if (end <= cursor) continue;
+    const from = Math.max(start, cursor);
+    if (from > cursor) parts.push({ text: text.slice(cursor, from), marked: false });
+    parts.push({ text: text.slice(from, end), marked: true });
+    cursor = end;
+  }
+  if (cursor < text.length) parts.push({ text: text.slice(cursor), marked: false });
+  return parts;
+}
+
 /** A search result that is a list of passages the agent also sent as context. Mirrors the backend's already_in_context. */
-function alreadyInContext(output: unknown, context: string[]): boolean {
+export function alreadyInContext(output: unknown, context: string[]): boolean {
   if (!Array.isArray(output) || output.length === 0 || context.length === 0) return false;
   const joined = context.join("\n");
   return output.every((item) => {

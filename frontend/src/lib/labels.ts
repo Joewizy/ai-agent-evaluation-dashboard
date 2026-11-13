@@ -50,9 +50,23 @@ export const REVIEW_LABEL: Record<ReviewVerdict, string> = {
   inconclusive: "Not sure",
 };
 
-/** Claim verdicts as the judge gives them (evidence verdicts from "Backed by sources"). */
+export type ReviewTarget = "metric_result" | "explanation";
+
+/** What a reviewer is asked. A failed check and an explanation are different questions, so the words differ. */
+export const REVIEW_QUESTION: Record<ReviewTarget, string> = {
+  metric_result: "Is this failure real?",
+  explanation: "Does this explanation hold up?",
+};
+
+/** The verdict as the reviewer sees it. Stored as correct / incorrect / inconclusive in both cases. */
+export function reviewLabel(target: ReviewTarget, verdict: ReviewVerdict): string {
+  if (target === "metric_result") return { correct: "Real failure", incorrect: "False alarm", inconclusive: "Not sure" }[verdict];
+  return { correct: "It holds", incorrect: "It doesn’t", inconclusive: "Not sure" }[verdict];
+}
+
+/** Claim verdicts as the judge gives them (evidence verdicts from "Grounded"). */
 export const CLAIM_VERDICT = {
-  passed: { label: "Backed by sources", bg: "var(--hl-ok-bg)", fg: "var(--hl-ok-fg)", line: "var(--s-pass)" },
+  passed: { label: "Supported by the sources", bg: "var(--hl-ok-bg)", fg: "var(--hl-ok-fg)", line: "var(--s-pass)" },
   failed: { label: "Contradicts the sources", bg: "var(--hl-bad-bg)", fg: "var(--hl-bad-fg)", line: "var(--s-conf)" },
   missing: {
     label: "Not mentioned in the sources",
@@ -66,7 +80,7 @@ export const CLAIM_VERDICT = {
 export const INSTRUCTIONS_SOURCE = "agent instructions";
 
 const FROM_INSTRUCTIONS = {
-  label: "Backed by the agent’s instructions",
+  label: "Supported by the agent’s instructions",
   bg: "var(--hl-info-bg)",
   fg: "var(--hl-info-fg)",
   line: "var(--accent)",

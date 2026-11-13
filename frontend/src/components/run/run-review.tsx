@@ -4,7 +4,8 @@ import Link from "next/link";
 import { useState } from "react";
 import { api, type MetricInfo, type Review, type ReviewIn, type ReviewVerdict, type RunReport } from "@/lib/api";
 import { useStoredText } from "@/lib/browser-state";
-import { metricName, REVIEW_LABEL } from "@/lib/labels";
+import { metricName, REVIEW_QUESTION, reviewLabel } from "@/lib/labels";
+import { isLimit, readableMs } from "@/lib/metrics";
 import { firstSentence } from "@/lib/run-text";
 import { formatTime } from "@/lib/time";
 import { Card, Icon, StatusChip } from "../ui";
@@ -22,7 +23,7 @@ const HEADLINE: Record<RunReport["status"], string> = {
   evaluating: "Opens once the run is scored.",
   passed: "Nothing failed, so there’s nothing to review.",
   could_not_run: "Nothing failed, but a check couldn’t run. Nothing to review.",
-  needs_review: "Correct means the failure is real. Not sure keeps the run here.",
+  needs_review: "“Real failure” confirms the run. “Not sure” keeps it here for someone else.",
   confirmed: "A failure is real. Record what was done about it.",
   false_alarm: "Reviewers ruled every failure a false alarm, so our tool was wrong here.",
   resolved: "Action recorded.",
@@ -53,24 +54,24 @@ export function ReviewRail({
   const [historyOpen, setHistoryOpen] = useState(false);
   const { status } = report;
 
-  // Measured failures (speed, cost, an error the agent recorded) are facts: nothing for a person to disagree with.
+  // Measured failures (speed, cost, recorded step errors) are confirmed without a review.
   const measured = report.results.filter((r) => r.passed === false && r.review === "auto");
   const items: Item[] = [
     ...report.results
       .filter((r) => r.passed === false && r.review !== "auto")
       .map((r) => ({
         key: `m:${r.metric_id}`,
-        kind: "Failed check",
+        kind: isLimit(r) ? "Over the limit" : "Failed check",
         title: metricName(r.metric_id, metrics),
-        detail: `${r.score?.toFixed(2) ?? ""} · ${firstSentence(r.reason)}`,
-        question: "Was this result right?",
+        detail: `${r.score?.toFixed(2) ?? ""} · ${readableMs(firstSentence(r.reason))}`,
+        question: REVIEW_QUESTION.metric_result,
         target: { target: "metric_result" as const, metric_id: r.metric_id },
       })),
     ...(report.diagnosis?.explanations ?? []).map((e, i) => ({
       key: `e:${i}`,
       kind: `Possibility ${i + 1}`,
       title: e.summary,
-      question: "Was this explanation right or useful?",
+      question: REVIEW_QUESTION.explanation,
       target: { target: "explanation" as const, explanation: i },
     })),
   ];
@@ -104,7 +105,6 @@ export function ReviewRail({
 
   return (
     <Card className="flex flex-col">
-      {/* The "Review" heading is the eyebrow above this card, level with the lineage's section headings. */}
       <div className="flex flex-col gap-1.5 border-b border-line-2 px-4 py-3.5">
         <StatusChip status={status} size="lg" />
         <p className="m-0 text-[13px] leading-normal text-ink-2">{HEADLINE[status]}</p>
@@ -140,7 +140,7 @@ export function ReviewRail({
                     <Icon.Check size={14} />
                   </span>
                   <span className="font-semibold">{metricName(r.metric_id, metrics)}</span>
-                  <span className="text-ink-3">measured</span>
+                  <span className="text-ink-3">{isLimit(r) ? "over the limit, measured" : "measured"}</span>
                 </div>
               ))}
             </div>
@@ -152,7 +152,9 @@ export function ReviewRail({
               <div key={item.key} className="flex flex-col gap-2 border-b border-line-2 px-4 py-3">
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="text-xs font-semibold text-ink-3">{item.kind}</span>
-                  <span className={`text-[12px] ${current ? "font-semibold text-ink" : "text-ink-3"}`}>{current ? `Latest: ${REVIEW_LABEL[current]}` : "Not reviewed yet"}</span>
+                  <span className={`text-[12px] ${current ? "font-semibold text-ink" : "text-ink-3"}`}>
+                    {current ? `Latest: ${reviewLabel(item.target.target, current)}` : "Not reviewed yet"}
+                  </span>
                 </div>
                 <div className="text-[14px] leading-[1.4] font-semibold">{item.title}</div>
                 {item.detail ? <div className="text-[12.5px] leading-normal text-ink-3">{item.detail}</div> : null}
@@ -170,7 +172,7 @@ export function ReviewRail({
                           on ? "border-ink bg-ink text-canvas" : "border-line bg-surface text-ink hover:bg-surface-2"
                         }`}
                       >
-                        {busy === item.key ? "…" : REVIEW_LABEL[v]}
+                        {busy === item.key ? "…" : reviewLabel(item.target.target, v)}
                       </button>
                     );
                   })}
@@ -211,7 +213,7 @@ export function ReviewRail({
                         <span className="mono text-ink-3">{formatTime(review.reviewed_at, now)}</span>
                         <span className="font-semibold">{review.reviewer}</span>
                         <span className="text-ink-2">on {describe(review)}:</span>
-                        <span className="inline-flex h-5 items-center rounded-full border border-line px-1.5 text-[11px] font-semibold">{REVIEW_LABEL[review.verdict]}</span>
+                        <span className="inline-flex h-5 items-center rounded-full border border-line px-1.5 text-[11px] font-semibold">{reviewLabel(review.target, review.verdict)}</span>
                         {!counts ? <span className="text-[11px] text-ink-3">replaced later</span> : null}
                         {review.note ? <span className="basis-full leading-[1.4] text-ink-2">“{review.note}”</span> : null}
                       </li>
@@ -243,7 +245,7 @@ function ActionTaken({ report, now, reviewer, onChanged }: { report: RunReport; 
         </div>
         <p className="m-0 text-[14.5px] leading-normal font-medium text-ink">{resolution.action}</p>
         <Link href="/" className="inline-flex h-9 w-fit items-center rounded-lg border border-line bg-surface px-3 text-[13px] font-semibold text-ink no-underline hover:bg-surface-2">
-          Back to Today
+          Back to the overview
         </Link>
       </div>
     );

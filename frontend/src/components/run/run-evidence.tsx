@@ -3,6 +3,7 @@
 import { type ReactNode, useState } from "react";
 import type { Evidence as EvidenceItem, MetricInfo, MetricResult, Observation, Ref, RunReport, SecondOpinion } from "@/lib/api";
 import { CLAIM_VERDICT, type ClaimLook, claimLook, INSTRUCTIONS_SOURCE, judgeVerdictLabel, metricName, patternLabel } from "@/lib/labels";
+import { isLimit, readableMs } from "@/lib/metrics";
 import { shorten } from "@/lib/run-text";
 import { BasisBadge, CodeBadge, Icon, JudgeBadge, RecordedBadge } from "../ui";
 import { Section } from "./section";
@@ -24,7 +25,6 @@ interface ClaimObservations {
 
 interface ClaimGroup {
   metric: string;
-  model: string | null;
   claims: ClaimObservations[];
 }
 
@@ -38,16 +38,16 @@ const GROUP_TITLE: Record<string, string> = {
 };
 
 /** A short description of the judge's procedure for each metric, shown above its claim list. */
-const HOW_IT_WORKS: Record<string, (n: number, model: string) => string> = {
-  groundedness: (n, model) =>
-    `The AI judge (${model}) rewrote the answer as ${n} short claim${n === 1 ? "" : "s"} and looked for each one in the sources. ` +
+const HOW_IT_WORKS: Record<string, (n: number) => string> = {
+  groundedness: (n) =>
+    `The AI judge rewrote the answer as ${n} short claim${n === 1 ? "" : "s"} and looked for each one in the sources. ` +
     "Where it calls a claim backed or contradicted it must quote the source, and our code then checks that the quote really exists. " +
     "The verdict itself is the judge’s opinion.",
-  correctness: (n, model) =>
-    `The AI judge (${model}) rewrote the answer as ${n} short claim${n === 1 ? "" : "s"} and compared each one with the answer key, quoting the key where it could. ` +
+  correctness: (n) =>
+    `The AI judge rewrote the answer as ${n} short claim${n === 1 ? "" : "s"} and compared each one with the answer key, quoting the key where it could. ` +
     "Our code checks that each quote really is in the key. The verdict itself is the judge’s opinion.",
-  "key-facts": (n, model) =>
-    `The answer missed facts from the answer key, so the AI judge (${model}) looked for ${n === 1 ? "that fact" : `those ${n} facts`} in what the agent looked up.`,
+  "key-facts": (n) =>
+    `The answer missed facts from the answer key, so the AI judge looked for ${n === 1 ? "that fact" : `those ${n} facts`} in what the agent looked up.`,
 };
 
 /** Claim observations ("<metric>-claim-<n>") collect their quote check and problems; the rest are plain facts. */
@@ -61,7 +61,7 @@ function groupObservations(observations: Observation[], results: MetricResult[])
       const [, metric, number] = match;
       let group = groups.find((g) => g.metric === metric);
       if (!group) {
-        group = { metric, model: o.judge_model ?? null, claims: [] };
+        group = { metric, claims: [] };
         groups.push(group);
       }
       const evidence = results.find((r) => r.metric_id === metric)?.evidence[Number(number) - 1];
@@ -119,7 +119,7 @@ function verdictLook(metric: string, claim: ClaimObservations): ClaimLook {
     case "passed":
       return claim.evidence?.found_in === INSTRUCTIONS_SOURCE
         ? claimLook({ verdict: "passed", found_in: INSTRUCTIONS_SOURCE })
-        : { ...CLAIM_VERDICT.passed, label: `Backed by ${reference}` };
+        : { ...CLAIM_VERDICT.passed, label: `Supported by ${reference}` };
     case "failed":
       return { ...CLAIM_VERDICT.failed, label: `Contradicts ${reference}` };
     case "key_contradicted":
@@ -179,12 +179,12 @@ const TONE_ICON: Record<Tone, ReactNode> = {
   ),
 };
 
-/** Who is speaking on a line: the AI judge (an opinion) or our code (a check). */
-function Who({ who, model }: { who: "judge" | "code"; model?: string | null }) {
+/** Who is speaking on a line: the AI judge (an opinion), a second judge re-checking it, or our code (a check). */
+function Who({ who, second = false }: { who: "judge" | "code"; second?: boolean }) {
   return who === "judge" ? (
     <span className="inline-flex h-[22px] flex-none items-center gap-1 rounded border border-dashed border-ink-3 px-1.5 text-[11.5px] font-semibold whitespace-nowrap text-ink-2">
       <Icon.Speech />
-      AI judge{model ? <span className="mono font-medium"> · {model}</span> : null}
+      {second ? "Second AI judge" : "AI judge"}
     </span>
   ) : (
     <span className="inline-flex h-[22px] flex-none items-center rounded bg-ink px-1.5 text-[11.5px] font-semibold whitespace-nowrap text-canvas">Code</span>
@@ -194,7 +194,7 @@ function Who({ who, model }: { who: "judge" | "code"; model?: string | null }) {
 function Line({
   id,
   who,
-  model,
+  second,
   tone,
   tag,
   points,
@@ -203,7 +203,7 @@ function Line({
 }: {
   id?: string;
   who: "judge" | "code";
-  model?: string | null;
+  second?: boolean;
   tone?: Tone;
   tag: (id: string | undefined) => ReactNode;
   points: (id: string) => ReactNode;
@@ -213,7 +213,7 @@ function Line({
   return (
     <div className={`flex flex-wrap items-baseline gap-x-2.5 gap-y-1 rounded-md px-1 py-1 ${id ? mark(id) : ""}`}>
       {tag(id)}
-      <Who who={who} model={model} />
+      <Who who={who} second={second} />
       <span className="min-w-0 flex-[1_1_260px] text-[13px] leading-normal text-ink-2">
         {tone ? <span className="mr-1.5 inline-flex align-[-2px]">{TONE_ICON[tone]}</span> : null}
         {children}
@@ -274,7 +274,7 @@ function ClaimCard({
         </Line>
       ))}
       {second ? (
-        <Line who="judge" model={second.model} tag={tag} points={points} mark={mark}>
+        <Line who="judge" second tag={tag} points={points} mark={mark}>
           Re-checked this claim and {second.agreed ? "agrees" : "disagrees"}: {judgeVerdictLabel(second.verdict)}.
         </Line>
       ) : null}
@@ -295,7 +295,7 @@ function claimPhrase(claims: ClaimObservations[]): string {
   const reference = REFERENCE[metric] ?? "the sources";
   const fact = metric === "key-facts" || verdict === "left_out" || verdict === "key_contradicted";
   const what: Record<Verdict, string> = {
-    passed: `backed by ${reference}`,
+    passed: `supported by ${reference}`,
     failed: `contradicted by ${reference}`,
     missing: `not in ${reference}`,
     left_out: "left out of the answer",
@@ -402,7 +402,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** Sections 4 and 5: what we observed, and the possible explanations that rest on it. */
+/** Sections 2 and 3: what we observed, and the possible explanations that rest on it. */
 export function Evidence({ report, failed, metrics }: { report: RunReport; failed: boolean; metrics?: MetricInfo[] }) {
   const diagnosis = report.diagnosis;
   const observations = diagnosis?.observations ?? [];
@@ -443,11 +443,15 @@ export function Evidence({ report, failed, metrics }: { report: RunReport; faile
   };
 
   const couldNotRun = report.results.filter((r) => r.skipped_because === "could_not_run").map((r) => metricName(r.metric_id, metrics));
+  // When only limit checks (time, cost) were breached there is no failure to explain: the measurement is the whole story.
+  const failedResults = report.results.filter((r) => r.passed === false);
+  const onlyLimits = failedResults.length > 0 && failedResults.every(isLimit);
+  const limitNames = failedResults.map((r) => metricName(r.metric_id, metrics)).join(", ");
 
   return (
     <>
-      <Section n={4} id="sec-observed" title="What we observed">
-        <div className="rounded-[10px] border border-line bg-surface">
+      <Section n={2} id="sec-observed" title="What we observed">
+        <div className="rounded-[4px] border border-line bg-surface">
           <div className="flex flex-wrap items-center gap-x-[22px] gap-y-2 border-b border-line-2 px-[18px] py-3.5 text-[12.5px] text-ink-3">
             <span className="text-[13.5px] text-ink-2">Each line says how we know it:</span>
             <span className="inline-flex items-center gap-2">
@@ -472,8 +476,8 @@ export function Evidence({ report, failed, metrics }: { report: RunReport; faile
                 {facts.map((o) => (
                   <li key={o.id} className={`flex flex-wrap items-baseline gap-x-3 gap-y-1.5 rounded-lg px-2.5 py-2 ${mark(o.id)}`}>
                     {tag(o.id)}
-                    <BasisBadge basis={o.basis} model={o.judge_model} />
-                    <span className="min-w-0 flex-[1_1_320px] text-sm leading-normal">{o.text}</span>
+                    <BasisBadge basis={o.basis} />
+                    <span className="min-w-0 flex-[1_1_320px] text-sm leading-normal">{readableMs(o.text)}</span>
                     {points(o.id)}
                   </li>
                 ))}
@@ -499,15 +503,8 @@ export function Evidence({ report, failed, metrics }: { report: RunReport; faile
               <Group
                 key={group.metric}
                 title={GROUP_TITLE[group.metric] ?? `Claims checked for ${metricName(group.metric, metrics)}`}
-                sub={
-                  <>
-                    <span>{counts}</span>
-                    <span className="inline-flex items-center gap-1.5">
-                      Verdicts by <JudgeBadge model={group.model} />
-                    </span>
-                  </>
-                }
-                note={HOW_IT_WORKS[group.metric]?.(group.claims.length, group.model ?? "AI judge")}
+                sub={<span>{counts}</span>}
+                note={HOW_IT_WORKS[group.metric]?.(group.claims.length)}
               >
                 {issues.length > 0 || open ? (
                   <ol className="m-0 flex list-none flex-col gap-2 p-0">
@@ -516,7 +513,7 @@ export function Evidence({ report, failed, metrics }: { report: RunReport; faile
                     ))}
                   </ol>
                 ) : (
-                  <p className="m-0 text-[13px] text-ink-3">Every claim was backed.</p>
+                  <p className="m-0 text-[13px] text-ink-3">Every claim was supported.</p>
                 )}
                 {backed.length > 0 ? (
                   <button
@@ -524,7 +521,7 @@ export function Evidence({ report, failed, metrics }: { report: RunReport; faile
                     aria-expanded={open}
                     className="h-9 self-start rounded-lg border border-line px-3 text-[13px] font-medium text-ink-2 hover:bg-surface-2"
                   >
-                    {open ? "Hide" : "Show"} {backed.length} backed claim{backed.length === 1 ? "" : "s"}
+                    {open ? "Hide" : "Show"} {backed.length} supported claim{backed.length === 1 ? "" : "s"}
                   </button>
                 ) : null}
               </Group>
@@ -540,13 +537,13 @@ export function Evidence({ report, failed, metrics }: { report: RunReport; faile
                   <div key={i} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13.5px]">
                     <span className="text-ink-2">Claim “{s.claim}”</span>
                     <span>
-                      <span className="mono">{s.original_model}</span>: <strong>{judgeVerdictLabel(s.original_verdict)}</strong>
+                      First judge: <strong>{judgeVerdictLabel(s.original_verdict)}</strong>
                     </span>
                     <span aria-hidden="true" className="text-ink-3">
                       ·
                     </span>
                     <span>
-                      <span className="mono">{s.model}</span>: <strong>{judgeVerdictLabel(s.verdict)}</strong>
+                      Second judge: <strong>{judgeVerdictLabel(s.verdict)}</strong>
                     </span>
                     {s.agreed ? (
                       <span className="inline-flex h-6 items-center gap-[5px] rounded-full border border-line px-[9px] text-[12.5px] font-semibold">
@@ -566,7 +563,7 @@ export function Evidence({ report, failed, metrics }: { report: RunReport; faile
         </div>
       </Section>
 
-      <Section n={5} id="sec-explain" title="Possible explanations" last>
+      <Section n={3} id="sec-explain" title="Possible explanations" last>
         <div className="flex flex-col gap-3">
           {explanations.length > 0 ? (
             <p className="m-0 text-[13.5px] text-ink-2">Possibilities, not a verdict. Each says what it rests on, what counts against it, and how to check.</p>
@@ -600,7 +597,7 @@ export function Evidence({ report, failed, metrics }: { report: RunReport; faile
               );
             };
             return (
-              <article key={i} className={`m-0 rounded-[10px] border bg-surface px-5 py-[18px] ${on ? "border-accent" : "border-line"}`}>
+              <article key={i} className={`m-0 rounded-[4px] border bg-surface px-5 py-[18px] ${on ? "border-accent" : "border-line"}`}>
                 <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
                   <div className="flex flex-wrap items-center gap-2.5">
                     <span className="text-xs font-semibold text-ink-3">Possibility {i + 1}</span>
@@ -652,8 +649,19 @@ export function Evidence({ report, failed, metrics }: { report: RunReport; faile
             );
           })}
 
-          {failed && explanations.length === 0 ? (
-            <div className="flex flex-col gap-2.5 rounded-[10px] border border-line bg-surface p-5">
+          {failed && explanations.length === 0 && onlyLimits ? (
+            <div className="flex flex-col gap-2.5 rounded-[4px] border border-line bg-surface p-5">
+              <div className="flex items-center gap-2.5">
+                <Icon.Info />
+                <h3 className="m-0 text-[17px] font-semibold">Nothing to explain</h3>
+              </div>
+              <p className="m-0 text-sm leading-[1.55] text-ink-2">
+                {limitNames} {failedResults.length === 1 ? "is" : "are"} over the limit and no other check failed. The measurement at the top of the page is the
+                whole story: what to do about it is a decision, not a diagnosis.
+              </p>
+            </div>
+          ) : failed && explanations.length === 0 ? (
+            <div className="flex flex-col gap-2.5 rounded-[4px] border border-line bg-surface p-5">
               <div className="flex items-center gap-2.5">
                 <Icon.Question />
                 <h3 className="m-0 text-[17px] font-semibold">The evidence doesn’t explain this failure</h3>
@@ -665,7 +673,7 @@ export function Evidence({ report, failed, metrics }: { report: RunReport; faile
           ) : null}
 
           {!failed ? (
-            <div className="rounded-[10px] border border-line bg-surface px-[18px] py-4 text-sm leading-[1.55] text-ink-2">
+            <div className="rounded-[4px] border border-line bg-surface px-[18px] py-4 text-sm leading-[1.55] text-ink-2">
               {couldNotRun.length > 0
                 ? `Nothing failed, but “${couldNotRun.join("”, “")}” couldn’t run, so this run isn’t a pass either. There is nothing to explain or review.`
                 : "Nothing failed, so there is nothing to explain."}
@@ -673,7 +681,7 @@ export function Evidence({ report, failed, metrics }: { report: RunReport; faile
           ) : null}
 
           {diagnosis && diagnosis.caveats.length > 0 ? (
-            <div className="rounded-[10px] border border-line bg-surface-2 px-[18px] py-3.5">
+            <div className="rounded-[4px] border border-line bg-surface-2 px-[18px] py-3.5">
               <div className="flex items-center gap-2 text-[13px] font-semibold text-ink-2">
                 <Icon.Info />
                 Also note

@@ -51,6 +51,8 @@ export interface Evidence {
   source?: string | null;
   found_in?: string | null;
   note?: string | null;
+  /** [start, end) in the answer, when code located the item there (a leak). */
+  span?: [number, number] | null;
 }
 
 export interface MetricResult {
@@ -58,6 +60,8 @@ export interface MetricResult {
   metric_id: string;
   score: number | null;
   threshold: number;
+  /** The metric's settings as applied to this run (per-agent overrides merged). Absent on older results. */
+  settings?: Record<string, unknown>;
   passed: boolean | null;
   reason: string;
   evidence: Evidence[];
@@ -151,13 +155,24 @@ export interface RunReport {
   resolution: Resolution | null;
 }
 
+/** One metric's result in a run list row: enough to show a value without loading the run. */
+export interface RowResult {
+  score: number | null;
+  passed: boolean | null;
+  failed: number;
+  total: number;
+}
+
 export interface RunRow {
   id: string;
   agent_name: string;
   mode: "live" | "testing";
   received_at: string;
   status: RunStatus;
+  latency_ms?: number | null;
+  cost_usd?: number | null;
   failed_metrics: string[];
+  results?: Record<string, RowResult>;
   causes: string[];
 }
 
@@ -197,6 +212,8 @@ export interface Summary {
   pending_reviews: number;
   actions: Action[];
   judge_vs_humans: ReviewCount;
+  /** Reviews of metric results, by metric id. Absent from older backends. */
+  agreement_by_metric?: Record<string, ReviewCount>;
   explanations_reviewed: ReviewCount;
 }
 
