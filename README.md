@@ -149,6 +149,10 @@ ollama pull gemma3:4b    # second opinion, about 3.4 GB
 - **Different model:** start the server with `JUDGE_MODEL=llama3.2 uvicorn app.main:app --reload`. Smaller models are faster but less reliable judges.
 - **Someone else's Ollama:** start the server with `OLLAMA_URL=http://<their-ip>:11434 uvicorn app.main:app --reload`. Run data is sent to their machine, so only do this on a network you trust.
 
+**Gemini instead of Ollama.** Set `GEMINI_API_KEY` and the judges use Google Gemini (`gemini-3.6-flash`, with `gemini-3.5-flash` for second opinions) instead of local models. `JUDGE_MODEL` and `SECOND_JUDGE_MODEL` still override the choice; any model name starting with `gemini` goes to Gemini, any other to Ollama. Busy or rate-limited calls are retried up to three times.
+
+**Hosting.** `render.yaml` deploys the API to Render (root `backend/`, judge on Gemini). Set `GEMINI_API_KEY` in Render, then set `BACKEND_URL` in the Vercel project to the Render URL and redeploy the dashboard. An agent anywhere can then post runs to `<render url>/runs`. Render's free plan has no persistent disk, so the SQLite database starts empty after each deploy or restart, and an idle service sleeps after 15 minutes (the first request then takes about a minute).
+
 **Dashboard** (Next.js 16, Tailwind 4):
 
 ```bash

@@ -1,0 +1,16 @@
+# Render blueprint for the evaluation API. The dashboard is deployed separately on Vercel.
+services:
+  - type: web
+    name: agent-evaluation-api
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /metrics
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.9"
+      - key: GEMINI_API_KEY
+        sync: false   # set in the Render dashboard
+      - key: EVAL_DB_PATH
+        value: evals.db
