@@ -2,17 +2,30 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, type ReviewCount, type RunStatus, type Summary } from "@/lib/api";
-import { patternLabel, STATUS, STATUS_ORDER } from "@/lib/labels";
-import { daysAgo, formatTime, isWindow, sinceOf, type Window, windowNoun, WINDOWS } from "@/lib/time";
+import { api, type MetricInfo, type RunRow, type RunStatus, type Summary } from "@/lib/api";
+import { metricName, patternLabel, STATUS, STATUS_ORDER } from "@/lib/labels";
+import { metricOrder } from "@/lib/metrics";
+import { DEFAULT_WINDOW, daysAgo, formatTime, isWindow, sinceOf, type Window, windowNoun, WINDOWS } from "@/lib/time";
 import { useResource } from "@/lib/use-resource";
-import { Card, CardTitle, ErrorNote, LiveNote, Loading, MethodBadge, PageTitle, Select, STATUS_FILL } from "./ui";
+import { Card, CardTitle, ErrorNote, Icon, LiveNote, Loading, PageTitle, Select, STATUS_FILL } from "./ui";
 
 const TRUST_DAYS = 30;
+const ACTIONS_SHOWN = 4;
 
-function runsHref(status: RunStatus | "all", window: Window) {
+/** One line under each check's name in the Checks table. */
+const CHECK_NOTE: Record<string, string> = {
+  groundedness: "Claims supported by what the agent looked up",
+  correctness: "Test answer matches the answer key",
+  data_leakage: "No personal data in the answer",
+  execution_success: "Every step completed without an error",
+  latency: "Finished within the time limit",
+  cost: "Stayed within the cost limit",
+};
+
+function runsHref(status: RunStatus | "all", window: Window, agent = "") {
   const params = new URLSearchParams({ status });
-  if (window !== "today") params.set("since", window);
+  if (window !== DEFAULT_WINDOW) params.set("since", window);
+  if (agent) params.set("agent", agent);
   return `/runs?${params}`;
 }
 
@@ -20,26 +33,51 @@ export function TodayView() {
   const router = useRouter();
   const params = useSearchParams();
   const raw = params.get("since");
-  const window: Window = isWindow(raw) ? raw : "today";
+  const window: Window = isWindow(raw) ? raw : DEFAULT_WINDOW;
+  const agent = params.get("agent") ?? "";
 
-  // The Today page polls while it's open; the trust numbers and metric list don't change minute to minute.
-  const summary = useResource(`summary:${window}`, () => api.summary({ since: sinceOf(window) }), () => true);
-  const trust = useResource("summary:trust", () => api.summary({ since: daysAgo(TRUST_DAYS) }));
+  // The summary polls while the page is open; the history and metric list are fetched once.
+  const summary = useResource(`summary:${window}:${agent}`, () => api.summary({ since: sinceOf(window), agent: agent || undefined }), () => true);
+  const trust = useResource(`summary:trust:${agent}`, () => api.summary({ since: daysAgo(TRUST_DAYS), agent: agent || undefined }));
+  const history = useResource(`runs:history:${agent}`, () => api.runs({ since: daysAgo(TRUST_DAYS * 2), agent: agent || undefined }));
+  const agents = useResource("summary:agents", () => api.summary({ since: daysAgo(TRUST_DAYS) }));
   const metrics = useResource("metrics", api.metrics);
 
-  const setWindow = (value: string) => router.replace(value === "today" ? "/" : `/?since=${value}`);
+  const setParam = (key: string, value: string | null) => {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    const query = next.toString();
+    router.replace(query ? `/?${query}` : "/");
+  };
+
+  const agentNames = Object.keys(agents.data?.by_agent ?? {}).sort();
+  // From the client-side fetch time, so the server and the browser never render different dates.
+  const dateLine = summary.updatedAt?.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 
   return (
-    <main className="mx-auto flex max-w-[1620px] flex-col gap-5 px-8 pt-7 pb-[72px]">
-      <PageTitle title={window === "today" ? "Today" : "Overview"} sub="What ran, what broke, and what is waiting on a person.">
-        <LiveNote updatedAt={summary.updatedAt} />
-        <Select id="since-today" label="Showing" value={window} onChange={(e) => setWindow(e.target.value)}>
+    <main className="mx-auto flex max-w-[1280px] flex-col gap-4 px-8 pt-8 pb-10">
+      <PageTitle
+        eyebrow={dateLine}
+        title="Overview"
+        sub={`Finished agent runs ${windowNoun(window)}, and the work waiting for review.`}
+      >
+        <Select id="since-today" label="Showing" value={window} onChange={(e) => setParam("since", e.target.value === DEFAULT_WINDOW ? null : e.target.value)}>
           {WINDOWS.map((w) => (
             <option key={w.value} value={w.value}>
               {w.label}
             </option>
           ))}
         </Select>
+        <Select id="agent-today" label="Agent" value={agent} onChange={(e) => setParam("agent", e.target.value || null)}>
+          <option value="">All agents</option>
+          {agentNames.map((name) => (
+            <option key={name} value={name}>
+              {name || "unnamed agent"}
+            </option>
+          ))}
+        </Select>
+        <LiveNote updatedAt={summary.updatedAt} />
       </PageTitle>
 
       {summary.error ? <ErrorNote error={summary.error} onRetry={summary.refresh} /> : null}
@@ -47,21 +85,23 @@ export function TodayView() {
         summary.error ? null : <Loading />
       ) : (
         <>
-          <Tiles summary={summary.data} window={window} />
-          <StatusBar summary={summary.data} window={window} />
-          {/* Grid items stretch, so these two cards are always the same height side by side. */}
-          <div className="grid gap-5 [grid-template-columns:repeat(auto-fit,minmax(min(460px,100%),1fr))]">
+          <Tiles summary={summary.data} window={window} agent={agent} />
+          <div className="grid gap-4 [grid-template-columns:minmax(0,1fr)] lg:[grid-template-columns:minmax(0,1.55fr)_minmax(0,1fr)]">
+            <StatusPanel summary={summary.data} window={window} agent={agent} />
             <Causes summary={summary.data} window={window} />
-            <Actions summary={summary.data} window={window} updatedAt={summary.updatedAt} />
           </div>
-          <Checks summary={summary.data} methods={metrics.data} />
-          {/* Grid items stretch, so these two cards are always the same height side by side. */}
-          <div className="grid gap-5 [grid-template-columns:repeat(auto-fit,minmax(min(460px,100%),1fr))]">
-            <Trust summary={trust.data} />
-            <Agents summary={summary.data} />
+          <Checks summary={summary.data} metrics={metrics.data} />
+          <div className="grid gap-4 [grid-template-columns:minmax(0,1fr)] lg:[grid-template-columns:minmax(0,1.55fr)_minmax(0,1fr)]">
+            <Trust runs={history.data} summary={trust.data} metrics={metrics.data} />
+            <Actions summary={summary.data} window={window} updatedAt={summary.updatedAt} />
           </div>
         </>
       )}
+
+      <footer className="mono mt-6 flex flex-wrap justify-between gap-3 border-t border-line pt-4 text-[10.5px] tracking-[0.1em] text-ink-3 uppercase">
+        <span>Agent evaluation</span>
+        <span>Finished runs only · evidence is kept as recorded</span>
+      </footer>
     </main>
   );
 }
@@ -70,91 +110,88 @@ function count(summary: Summary, status: RunStatus) {
   return summary.by_status[status] ?? 0;
 }
 
-function Tiles({ summary, window }: { summary: Summary; window: Window }) {
+// ---------- Tiles: one strip, joined ----------
+
+function Tiles({ summary, window, agent }: { summary: Summary; window: Window; agent: string }) {
   const evaluating = count(summary, "evaluating");
-  const falseAlarms = count(summary, "false_alarm");
+  const passed = count(summary, "passed");
+  const decided = summary.runs - evaluating - count(summary, "could_not_run");
   const confirmed = count(summary, "confirmed");
-  const needs = summary.pending_reviews;
-  const tiles: { label: string; n: number; sub: string; status: RunStatus | "all"; highlight?: boolean }[] = [
+  const agents = Object.keys(summary.by_agent).length;
+  const tiles: { label: string; n: number; sub: string; status: RunStatus | "all"; tone: string }[] = [
     {
-      label: window === "today" ? "Runs today" : "Runs",
+      label: "Runs observed",
       n: summary.runs,
-      sub: evaluating ? `${evaluating} still being scored` : "All scored",
+      sub: evaluating ? `${evaluating} still being scored` : `Across ${agents} agent${agents === 1 ? "" : "s"}`,
       status: "all",
+      tone: "text-ink",
     },
     {
-      label: "Failed runs",
-      n: summary.failed_runs,
-      sub: falseAlarms ? `${falseAlarms} later ruled a false alarm` : "None ruled a false alarm",
-      status: "all",
+      label: "Passed",
+      n: passed,
+      sub: decided ? `${((passed / decided) * 100).toFixed(1)}% of completed` : "Nothing completed yet",
+      status: "passed",
+      tone: "text-s-pass-fg",
     },
     {
       label: "Needs review",
-      n: needs,
-      sub: needs ? "Waiting on a person. Review now" : "Nothing waiting on you",
+      n: summary.pending_reviews,
+      sub: summary.pending_reviews ? "Waiting on a person" : "Nothing waiting on you",
       status: "needs_review",
-      highlight: needs > 0,
+      tone: "text-s-need-fg",
     },
+    { label: "Confirmed", n: confirmed, sub: confirmed ? "Action required" : "Nothing waiting for an action", status: "confirmed", tone: "text-s-conf-fg" },
     {
       label: "Resolved",
       n: count(summary, "resolved"),
-      sub: confirmed ? `${confirmed} confirmed, waiting for an action` : "Action recorded",
-      status: confirmed ? "confirmed" : "resolved",
+      sub: summary.actions.length ? `${new Set(summary.actions.map((a) => a.resolved_by)).size} reviewers active` : "No actions yet",
+      status: "resolved",
+      tone: "text-s-res-fg",
     },
-    { label: "Couldn’t be checked", n: count(summary, "could_not_run"), sub: "Not a pass and not a fail", status: "could_not_run" },
   ];
   return (
-    <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(200px,100%),1fr))]">
+    <div className="grid overflow-hidden rounded-[4px] border border-line bg-surface [grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))]">
       {tiles.map((tile) => (
         <Link
           key={tile.label}
-          href={runsHref(tile.status, window)}
-          className={`flex min-h-[126px] flex-col items-start gap-2.5 rounded-[10px] border px-[18px] py-4 text-left no-underline ${
-            tile.highlight
-              ? "border-s-need bg-s-need-bg text-s-need-fg hover:border-s-need-fg"
-              : "border-line bg-surface hover:border-ink-3"
-          }`}
+          href={runsHref(tile.status, window, agent)}
+          className="group -mb-px -ml-px flex flex-col gap-4 border-b border-l border-line px-5 pt-5 pb-4 text-ink no-underline hover:bg-surface-2"
         >
-          <span className={`text-[13px] font-medium ${tile.highlight ? "" : "text-ink-2"}`}>{tile.label}</span>
-          <span className={`text-4xl leading-none font-bold tracking-[-0.03em] ${tile.highlight ? "" : "text-ink"}`}>{tile.n}</span>
-          <span className={`text-[12.5px] leading-snug ${tile.highlight ? "" : "text-ink-3"}`}>{tile.sub}</span>
+          <span className={`text-[34px] leading-none font-normal tracking-[-0.02em] tabular-nums ${tile.tone}`}>{tile.n}</span>
+          <span className="flex items-end justify-between gap-2">
+            <span className="flex flex-col gap-0.5">
+              <span className="text-[13px] font-semibold">{tile.label}</span>
+              <span className="text-[12px] text-ink-3">{tile.sub}</span>
+            </span>
+            <span className="text-ink-3 transition-transform group-hover:translate-x-0.5">
+              <Icon.ChevronRight size={14} />
+            </span>
+          </span>
         </Link>
       ))}
     </div>
   );
 }
 
-function StatusBar({ summary, window }: { summary: Summary; window: Window }) {
+// ---------- Status and causes ----------
+
+function StatusPanel({ summary, window, agent }: { summary: Summary; window: Window; agent: string }) {
   const present = STATUS_ORDER.filter((s) => count(summary, s) > 0);
   const aria = "Runs by status: " + STATUS_ORDER.map((s) => `${STATUS[s].label} ${count(summary, s)}`).join(", ");
   return (
-    <Card className="flex flex-col gap-4 p-5">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="m-0 text-[15px] font-semibold">Runs by status</h2>
-        <span className="text-[13px] text-ink-3">
-          {summary.runs} runs {windowNoun(window)}
-        </span>
-      </div>
-      <div className="flex h-7 gap-0.5 overflow-hidden rounded bg-surface-2" role="img" aria-label={aria}>
+    <Card className="flex flex-col gap-5 p-5">
+      <CardTitle eyebrow="Run outcomes" title="Status distribution" meta={`${summary.runs} total`} />
+      <div className="flex h-6 gap-px overflow-hidden rounded-[2px] bg-surface-2" role="img" aria-label={aria}>
         {present.map((s) => (
-          <div
-            key={s}
-            title={`${STATUS[s].label}: ${count(summary, s)}`}
-            className="min-w-2"
-            style={{ flex: `${count(summary, s)} 1 0`, background: STATUS_FILL[STATUS[s].key] }}
-          />
+          <div key={s} title={`${STATUS[s].label}: ${count(summary, s)}`} className="min-w-1.5" style={{ flex: `${count(summary, s)} 1 0`, background: STATUS_FILL[STATUS[s].key] }} />
         ))}
       </div>
-      <div className="flex flex-wrap gap-x-1.5 gap-y-1">
-        {STATUS_ORDER.map((s) => (
-          <Link
-            key={s}
-            href={runsHref(s, window)}
-            className="inline-flex min-h-9 items-center gap-2 rounded-md px-2.5 text-[13px] text-ink-2 no-underline hover:bg-surface-2"
-          >
-            <span className="size-3 flex-none rounded-[3px]" style={{ background: STATUS_FILL[STATUS[s].key] }} />
-            <span>{STATUS[s].label}</span>
-            <span className="font-bold text-ink">{count(summary, s)}</span>
+      <div className="flex flex-wrap gap-x-5 gap-y-2">
+        {STATUS_ORDER.filter((s) => s !== "evaluating" || count(summary, s) > 0).map((s) => (
+          <Link key={s} href={runsHref(s, window, agent)} className="inline-flex items-center gap-2 text-[12.5px] text-ink-2 no-underline hover:text-ink">
+            <span className="size-2.5 flex-none rounded-[2px]" style={{ background: STATUS_FILL[STATUS[s].key] }} />
+            {STATUS[s].label}
+            <span className="font-semibold text-ink tabular-nums">{count(summary, s)}</span>
           </Link>
         ))}
       </div>
@@ -169,188 +206,193 @@ function Causes({ summary, window }: { summary: Summary; window: Window }) {
     return y - x;
   });
   const max = Math.max(1, ...entries.map(([, n]) => n));
-  const total = entries.reduce((sum, [, n]) => sum + n, 0);
-  const several = summary.runs_with_several_causes;
   return (
     <Card className="flex flex-col gap-4 p-5">
-      <CardTitle title={window === "today" ? "Possible causes of today’s failures" : "Possible causes of failures"} sub="Runs where this was a possible cause" />
+      <CardTitle eyebrow={`Failures ${windowNoun(window)}`} title="Failures by possible cause" />
       {entries.length === 0 ? (
-        <p className="m-0 text-[13.5px] text-ink-3">No failures {windowNoun(window)}.</p>
+        <p className="m-0 text-[13px] text-ink-3">No failures {windowNoun(window)}.</p>
       ) : (
-        <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
+        <ul className="m-0 flex list-none flex-col gap-3 p-0">
           {entries.map(([pattern, n]) => (
-            <li key={pattern} className="grid items-center gap-3 text-[13.5px] [grid-template-columns:minmax(150px,210px)_minmax(0,1fr)_28px]">
-              <span>{patternLabel(pattern)}</span>
-              <span title={`${patternLabel(pattern)}: possible cause in ${n} runs`} className="flex h-[18px] rounded bg-surface-2">
-                <span
-                  className="h-full rounded"
-                  style={{ width: `${(n / max) * 100}%`, background: pattern === "no_explanation" ? "var(--ink3)" : "var(--accent)" }}
-                />
+            <li key={pattern} className="flex flex-col gap-1.5">
+              <span className="flex justify-between gap-3 text-[12.5px]">
+                <span>{patternLabel(pattern)}</span>
+                <span className="font-semibold tabular-nums">{n}</span>
               </span>
-              <span className="text-right font-bold">{n}</span>
+              <span className="flex h-[5px] rounded-full bg-surface-2">
+                <span className="h-full rounded-full" style={{ width: `${(n / max) * 100}%`, background: pattern === "no_explanation" ? "var(--ink3)" : "var(--accent)" }} />
+              </span>
             </li>
           ))}
         </ul>
       )}
-      {summary.failed_runs > 0 ? (
-        <p className="m-0 border-t border-line-2 pt-3 text-[13px] leading-normal text-ink-2">
-          {several > 0
-            ? `${several} of ${summary.failed_runs} failed runs have more than one possible cause, so these add up to ${total}, not ${summary.failed_runs}.`
-            : `Each of the ${summary.failed_runs} failed runs has one possible cause.`}
+    </Card>
+  );
+}
+
+// ---------- Checks ----------
+
+const CHECK_COLUMNS = "[grid-template-columns:minmax(0,1fr)_90px_90px_90px_100px]";
+
+function Checks({ summary, metrics }: { summary: Summary; metrics?: MetricInfo[] }) {
+  const rows = Object.entries(summary.metrics).sort(([a], [b]) => metricOrder(a) - metricOrder(b));
+  return (
+    <Card className="flex flex-col gap-1 px-5 pt-5 pb-1">
+      <CardTitle eyebrow="Evaluation coverage" title="Checks" />
+      <div className="overflow-x-auto">
+        <div className="min-w-[620px]">
+          <div className={`mono grid gap-3 border-b border-line py-2.5 text-[10px] tracking-[0.1em] text-ink-3 uppercase ${CHECK_COLUMNS}`}>
+            <span>Check</span>
+            <span className="text-right">Checked</span>
+            <span className="text-right">Flagged</span>
+            <span className="text-right">Skipped</span>
+            <span className="text-right">Avg. score</span>
+          </div>
+          {rows.length === 0 ? <p className="m-0 py-4 text-[13px] text-ink-3">No runs yet.</p> : null}
+          {rows.map(([id, metric]) => (
+            <div key={id} className={`grid items-center gap-3 border-b border-line-2 py-3 last:border-b-0 ${CHECK_COLUMNS}`}>
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="text-[13.5px] font-semibold">{metricName(id, metrics)}</span>
+                <span className="truncate text-[12px] text-ink-3">{CHECK_NOTE[id] ?? metrics?.find((m) => m.id === id)?.description}</span>
+              </span>
+              <span className="mono text-right text-[13px] tabular-nums">{metric.scored}</span>
+              <span className={`mono text-right text-[13px] tabular-nums ${metric.failed ? "text-s-conf-fg" : "text-ink-3"}`}>{metric.failed}</span>
+              <span className="mono text-right text-[13px] text-ink-3 tabular-nums">{metric.could_not_run + metric.missing_data}</span>
+              <span className="mono text-right text-[13px] tabular-nums">{metric.average_score === null ? "—" : `${(metric.average_score * 100).toFixed(1)}%`}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ---------- Clean runs: how often runs come through with no real failure, day by day ----------
+
+const CLEAN: RunStatus[] = ["passed", "false_alarm"];
+const SETTLED: RunStatus[] = ["passed", "false_alarm", "needs_review", "confirmed", "resolved"];
+
+function cleanShare(rows: RunRow[]): number | null {
+  const settled = rows.filter((r) => SETTLED.includes(r.status));
+  return settled.length ? settled.filter((r) => CLEAN.includes(r.status)).length / settled.length : null;
+}
+
+function Trust({ runs, summary, metrics }: { runs?: RunRow[]; summary?: Summary; metrics?: MetricInfo[] }) {
+  const day = 24 * 3600_000;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const startMs = start.getTime();
+  const recent = (runs ?? []).filter((r) => new Date(r.received_at).getTime() >= startMs - (TRUST_DAYS - 1) * day);
+  const prior = (runs ?? []).filter((r) => {
+    const t = new Date(r.received_at).getTime();
+    return t < startMs - (TRUST_DAYS - 1) * day && t >= startMs - (TRUST_DAYS * 2 - 1) * day;
+  });
+  const days = Array.from({ length: TRUST_DAYS }, (_, i) => {
+    const from = startMs - (TRUST_DAYS - 1 - i) * day;
+    const rows = recent.filter((r) => {
+      const t = new Date(r.received_at).getTime();
+      return t >= from && t < from + day;
+    });
+    return { from, share: cleanShare(rows), n: rows.length };
+  });
+  const share = cleanShare(recent);
+  const before = cleanShare(prior);
+  const delta = share !== null && before !== null ? (share - before) * 100 : null;
+  const label = (ms: number) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+  // How often reviewers said a flagged failure was real, by check.
+  const agreement = Object.entries(summary?.agreement_by_metric ?? {})
+    .map(([id, c]) => ({ name: metricName(id, metrics), decided: c.correct + c.incorrect, share: c.agreement }))
+    .filter((a) => a.decided > 0);
+
+  return (
+    <Card className="flex flex-col gap-4 p-5">
+      <CardTitle eyebrow={`Last ${TRUST_DAYS} days`} title="Clean runs" meta="Runs with no real failure, by day" />
+      {!runs ? (
+        <p className="m-0 text-[13px] text-ink-3">Loading…</p>
+      ) : share === null ? (
+        <p className="m-0 text-[13px] text-ink-3">No finished runs in the last {TRUST_DAYS} days.</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="mono text-[34px] leading-none tracking-[-0.02em] tabular-nums">{(share * 100).toFixed(1)}%</span>
+            {delta !== null ? (
+              <span className="text-[12px] text-ink-3">
+                <span className={`font-semibold ${delta >= 0 ? "text-s-pass-fg" : "text-s-conf-fg"}`}>
+                  {delta >= 0 ? "+" : ""}
+                  {delta.toFixed(1)} pts
+                </span>{" "}
+                from the {TRUST_DAYS} days before
+              </span>
+            ) : (
+              <span className="text-[12px] text-ink-3">of {recent.filter((r) => SETTLED.includes(r.status)).length} finished runs</span>
+            )}
+          </div>
+          <div className="flex h-[150px] items-end gap-[3px]" role="img" aria-label={`Daily share of runs without a real failure, last ${TRUST_DAYS} days`}>
+            {days.map((d) => (
+              <span
+                key={d.from}
+                title={d.share === null ? `${label(d.from)}: no runs` : `${label(d.from)}: ${Math.round(d.share * 100)}% of ${d.n} runs`}
+                className="flex-1 rounded-t-[1px]"
+                style={{ height: d.share === null ? "3px" : `${Math.max(d.share * 100, 4)}%`, background: d.share === null ? "var(--line2)" : "var(--s-res)", opacity: d.share === null ? 1 : 0.75 }}
+              />
+            ))}
+          </div>
+          <div className="mono -mt-2 flex justify-between text-[10px] text-ink-3">
+            <span>{label(days[0].from)}</span>
+            <span>{label(days[Math.floor(TRUST_DAYS / 2)].from)}</span>
+            <span>Today</span>
+          </div>
+        </>
+      )}
+      {agreement.length > 0 ? (
+        <p className="m-0 mt-auto border-t border-line-2 pt-3 text-[12px] leading-normal text-ink-3">
+          Reviewers agreed a flagged failure was real:{" "}
+          {agreement.map((a, i) => (
+            <span key={a.name}>
+              {i ? " · " : ""}
+              <span className="text-ink-2">{a.name}</span> {Math.round((a.share ?? 0) * 100)}% of {a.decided}
+            </span>
+          ))}
         </p>
       ) : null}
     </Card>
   );
 }
 
+// ---------- Actions ----------
+
 function Actions({ summary, window, updatedAt }: { summary: Summary; window: Window; updatedAt?: Date }) {
   const today = updatedAt ?? new Date(summary.since);
   return (
-    <Card className="flex flex-col gap-3 p-5">
-      <CardTitle title={window === "today" ? "Actions taken today" : "Actions taken"} sub="What people did about confirmed failures" />
+    <Card className="flex flex-col gap-1 p-5">
+      <CardTitle eyebrow="Completed resolutions" title="Actions taken" meta={windowNoun(window)} />
       {summary.actions.length === 0 ? (
-        <p className="m-0 text-[13.5px] text-ink-3">No actions recorded yet {window === "today" ? "today" : windowNoun(window)}.</p>
+        <p className="m-0 pt-3 text-[13px] text-ink-3">No actions recorded {windowNoun(window)}.</p>
       ) : (
         <ul className="m-0 flex list-none flex-col p-0">
-          {summary.actions.map((action) => (
-            <li key={action.run_id} className="border-t border-line-2">
+          {summary.actions.slice(0, ACTIONS_SHOWN).map((action) => (
+            <li key={action.run_id} className="border-b border-line-2 last:border-b-0">
               <Link
                 href={`/runs/${action.run_id}`}
-                className="grid w-full gap-x-3 gap-y-1 rounded-md px-2 py-3 text-left text-ink no-underline hover:bg-surface-2 [grid-template-columns:52px_minmax(0,1fr)]"
+                className="grid w-full gap-x-3 py-3.5 text-left text-ink no-underline hover:bg-surface-2 [grid-template-columns:82px_minmax(0,1fr)]"
               >
-                <span className="mono pt-0.5 text-[12.5px] text-ink-3">{formatTime(action.resolved_at, today)}</span>
-                <span className="flex min-w-0 flex-col gap-1">
-                  <span className="text-sm leading-[1.45] font-medium">{action.action}</span>
-                  <span className="text-[12.5px] text-ink-3">
-                    {action.agent_name} · by {action.resolved_by}
-                  </span>
+                <span className="mono pt-0.5 text-[11px] text-ink-3">{formatTime(action.resolved_at, today)}</span>
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="text-[13px] leading-snug font-semibold">{action.action}</span>
+                  <span className="text-[12px] text-ink-3">{action.agent_name}</span>
+                  <span className="text-[11.5px] text-ink-3">Recorded by {action.resolved_by}</span>
                 </span>
               </Link>
             </li>
           ))}
         </ul>
       )}
-    </Card>
-  );
-}
-
-const CHECK_COLUMNS = "[grid-template-columns:minmax(170px,1.5fr)_minmax(190px,1.5fr)_90px_80px_100px_110px_110px]";
-
-function Checks({ summary, methods }: { summary: Summary; methods?: { id: string; method: "code" | "llm_judge"; judge_model: string | null }[] }) {
-  const rows = Object.entries(summary.metrics);
-  return (
-    <Card className="flex flex-col gap-3 px-5 pt-5 pb-2">
-      <CardTitle
-        title="Checks"
-        sub="Averages count only runs that were checked. Runs where a check couldn’t run or had no data are left out: they are neither pass nor fail."
-      />
-      <div className="overflow-x-auto">
-        <div className="min-w-[880px] text-[13.5px]">
-          <div className={`grid gap-3 border-b border-line px-1 py-2.5 text-xs font-semibold text-ink-3 ${CHECK_COLUMNS}`}>
-            <span>Check</span>
-            <span>How it’s checked</span>
-            <span className="text-right">Runs scored</span>
-            <span className="text-right">Failed</span>
-            <span className="text-right">Average score</span>
-            <span className="text-right">Couldn’t run</span>
-            <span className="text-right">No data</span>
-          </div>
-          {rows.length === 0 ? <p className="m-0 px-1 py-4 text-ink-3">No runs yet.</p> : null}
-          {rows.map(([id, metric]) => {
-            const info = methods?.find((m) => m.id === id);
-            return (
-              <div key={id} className={`grid items-center gap-3 border-b border-line-2 px-1 py-3 ${CHECK_COLUMNS}`}>
-                <span className="font-medium">{metric.name}</span>
-                <span>{info ? <MethodBadge method={info.method} model={info.judge_model} codeLabel="Code" /> : null}</span>
-                <span className="text-right">{metric.scored}</span>
-                <span className="text-right font-bold">{metric.failed}</span>
-                <span className="text-right">{metric.average_score === null ? "—" : metric.average_score.toFixed(2)}</span>
-                <span className="text-right text-ink-3">{metric.could_not_run || "—"}</span>
-                <span className="text-right text-ink-3">{metric.missing_data || "—"}</span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-function Agreement({ label, counts, unit = "" }: { label: string; counts: ReviewCount; unit?: string }) {
-  const decided = counts.correct + counts.incorrect;
-  return (
-    <div className="flex flex-col gap-2">
-      <span className="text-[13px] text-ink-2">{label}</span>
-      {decided === 0 ? (
-        <span className="text-sm text-ink-3">No reviews yet</span>
-      ) : (
-        <>
-          <span className="flex items-baseline gap-2">
-            <span className="text-2xl font-bold tracking-[-0.02em]">
-              {counts.correct} of {decided}
-              {unit}
-            </span>
-            <span className="text-sm text-ink-2">({Math.round((counts.correct / decided) * 100)}%)</span>
-          </span>
-          <span className="flex h-1.5 rounded-[3px] bg-surface-2">
-            <span className="h-full rounded-[3px] bg-accent" style={{ width: `${(counts.correct / decided) * 100}%` }} />
-          </span>
-        </>
-      )}
-    </div>
-  );
-}
-
-function Trust({ summary }: { summary?: Summary }) {
-  const empty =
-    summary &&
-    summary.judge_vs_humans.correct + summary.judge_vs_humans.incorrect + summary.explanations_reviewed.correct + summary.explanations_reviewed.incorrect === 0;
-  return (
-    <Card className="flex flex-col gap-[18px] p-5">
-      <CardTitle title="How often reviewers agree with us" sub={`Last ${TRUST_DAYS} days. “Not sure” answers aren’t counted.`} />
-      {!summary ? (
-        <p className="m-0 text-sm text-ink-3">Loading…</p>
-      ) : empty ? (
-        <p className="m-0 rounded-lg bg-surface-2 p-4 text-sm text-ink-2">
-          Not enough reviews yet to say how often the judge or the explanations are right.
-        </p>
-      ) : (
-        <>
-          <Agreement label="Judge agreed with reviewers" counts={summary.judge_vs_humans} unit=" times" />
-          <Agreement label="Explanations found useful" counts={summary.explanations_reviewed} />
-        </>
-      )}
-    </Card>
-  );
-}
-
-function Agents({ summary }: { summary: Summary }) {
-  const agents = Object.entries(summary.by_agent).sort(([, a], [, b]) => b.runs - a.runs);
-  const columns = "[grid-template-columns:minmax(0,1.4fr)_repeat(3,minmax(0,1fr))]";
-  return (
-    <Card className="flex flex-col gap-2 px-5 pt-5 pb-2">
-      <h2 className="m-0 mb-1 text-[15px] font-semibold">By agent</h2>
-      <div className="text-[13.5px]">
-        <div className={`grid gap-3 border-b border-line px-1 py-2 text-xs font-semibold text-ink-3 ${columns}`}>
-          <span>Agent</span>
-          <span className="text-right">Runs</span>
-          <span className="text-right">Failed</span>
-          <span className="text-right">Couldn’t be checked</span>
-        </div>
-        {agents.length === 0 ? <p className="m-0 px-1 py-4 text-ink-3">No runs yet.</p> : null}
-        {agents.map(([name, agent]) => (
-          <Link
-            key={name}
-            href={`/runs?status=all&agent=${encodeURIComponent(name)}`}
-            className={`grid gap-3 border-b border-line-2 px-1 py-[11px] text-ink no-underline hover:bg-surface-2 ${columns}`}
-          >
-            <span className={`mono text-[13px] ${name ? "" : "text-ink-3"}`}>{name || "unnamed agent"}</span>
-            <span className="text-right">{agent.runs}</span>
-            <span className="text-right font-bold">{agent.failed}</span>
-            <span className="text-right text-ink-3">{agent.could_not_run}</span>
-          </Link>
-        ))}
-      </div>
+      {summary.actions.length > ACTIONS_SHOWN ? (
+        <Link href={runsHref("resolved", window)} className="mt-auto pt-2 text-[12.5px] font-medium text-accent no-underline hover:underline">
+          See all {summary.actions.length} resolved runs
+        </Link>
+      ) : null}
     </Card>
   );
 }

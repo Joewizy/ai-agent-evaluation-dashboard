@@ -63,7 +63,7 @@ Each metric is one YAML file in `backend/app/metrics/`.
 | Speed | Time, scored on a slope from target to limit | code | both |
 | Cost | Cost, scored on a slope from target to limit | code | both |
 | No data leaked | Card numbers, IBANs, emails, phones in the answer | code (with checksums) | both |
-| Backed by sources | Is each claim in the answer supported by what the agent looked up (context, tool and search results)? | AI judge | both |
+| Grounded | Is each claim in the answer supported by what the agent looked up (context, tool and search results)? | AI judge | both |
 | Correct answer | Does the answer match the answer key? (F1 over claims) | AI judge | testing |
 
 If a metric can't be scored, it's **skipped**, never failed. `skipped_because` says why: `missing_data` (the run didn't include what it needs) or `could_not_run` (for example, the AI judge was down).
@@ -110,7 +110,7 @@ curl -X POST localhost:8000/runs -H 'Content-Type: application/json' -d '{
 }'
 ```
 
-It replies with the run id and status `evaluating`. A moment later, `GET /runs/{id}` has the "Backed by sources" result:
+It replies with the run id and status `evaluating`. A moment later, `GET /runs/{id}` has the "Grounded" result:
 
 ```json
 {
@@ -137,7 +137,7 @@ uvicorn app.main:app --reload    # then open http://localhost:8000/docs
 pytest                           # tests use a fake judge, so they don't need Ollama
 ```
 
-**AI judge (optional, for development).** Two metrics, "Backed by sources" and "Correct answer", need a judge model. We currently use a local one through [Ollama](https://ollama.com):
+**AI judge (optional, for development).** Two metrics, "Grounded" and "Correct answer", need a judge model. We currently use a local one through [Ollama](https://ollama.com):
 
 ```bash
 ollama pull qwen3:8b     # default judge, about 5 GB
@@ -145,7 +145,6 @@ ollama pull gemma3:4b    # second opinion, about 3.4 GB
 ```
 
 - **No second opinion:** start the server with `SECOND_JUDGE_MODEL= uvicorn app.main:app --reload` (empty turns it off). Without `gemma3:4b` pulled, runs still work; the diagnosis says the second opinion couldn't run.
-
 - **Without it, everything else still works.** Those two metrics are skipped with the reason "couldn't reach Ollama" (`could_not_run`), never marked as passed.
 - **Different model:** start the server with `JUDGE_MODEL=llama3.2 uvicorn app.main:app --reload`. Smaller models are faster but less reliable judges.
 - **Someone else's Ollama:** start the server with `OLLAMA_URL=http://<their-ip>:11434 uvicorn app.main:app --reload`. Run data is sent to their machine, so only do this on a network you trust.
@@ -158,10 +157,10 @@ npm install
 npm run dev                       # http://localhost:3000, with the backend running on :8000
 ```
 
-- **Today** (`/`): runs since midnight, failures by possible cause, actions taken, checks, reviewer agreement, by agent. Refreshes every 5 s while open.
+- **Overview** (`/`): runs in the last 24 hours, 7 days or 30 days: outcomes, failures by possible cause, checks, clean runs by day, and actions taken. Refreshes every 5 s while open.
 - **Runs** (`/runs?status=needs_review&agent=`): the review queue and every other status.
 - **One run** (`/runs/{id}`): the full lineage, from question to possible explanations, with the review pinned beside it. Refreshes only while the run is being scored.
-- The browser calls `/api/*`, which Next.js forwards to the backend (`BACKEND_URL`, default `http://localhost:8000`). Status always comes from the API; the dashboard never works it out itself.
+- The browser calls `/api/*`, which Next.js forwards to the backend (`BACKEND_URL`, default `http://localhost:8000`). Status always comes from the API; the dahboard never works it out itself.
 
 ## Project layout
 
@@ -183,7 +182,7 @@ backend/
     metrics/           one YAML file per metric
   tests/
 frontend/
-  src/app/             routes: / (Today), /runs, /runs/[id]
+  src/app/             routes: / (Overview), /runs, /runs/[id]
   src/components/      the screens and shared pieces (status chips, evidence badges)
   src/lib/             typed API client, labels, polling hook
 scripts/compare/       the same sample run evaluated with DeepEval and Arize Phoenix, for comparison

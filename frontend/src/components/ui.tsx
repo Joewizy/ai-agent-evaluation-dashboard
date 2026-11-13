@@ -41,9 +41,10 @@ export function StatusChip({ status, size = "sm" }: { status: RunStatus; size?: 
 }
 
 /** A small pill for a metric result's state on the run page. */
-export function ResultChip({ state }: { state: "failed" | "passed" | "could_not_run" | "missing_data" }) {
+export function ResultChip({ state }: { state: "failed" | "over_limit" | "passed" | "could_not_run" | "missing_data" }) {
   const { label, key } = {
     failed: { label: "Failed", key: "conf" as const },
+    over_limit: { label: "Over the limit", key: "need" as const },
     passed: { label: "Passed", key: "pass" as const },
     could_not_run: { label: "Couldn’t run", key: "cnc" as const },
     missing_data: { label: "Missing data", key: "cnc" as const },
@@ -55,107 +56,101 @@ export function ResultChip({ state }: { state: "failed" | "passed" | "could_not_
   );
 }
 
-// ---------- How we know: solid for recorded and code, dashed for the AI judge, everywhere ----------
+// ---------- Evidence basis ----------
 
-const BADGE = "inline-flex h-[22px] items-center gap-[5px] rounded px-2 text-[11.5px] font-semibold whitespace-nowrap";
+/** Evidence-basis tag: green dot for recorded data, ink for code checks, amber for the AI judge. */
+function Tag({ dot, children }: { dot: string; children: ReactNode }) {
+  return (
+    <span className="mono inline-flex h-[20px] items-center gap-1.5 rounded-[3px] border border-line px-1.5 text-[10.5px] font-medium tracking-[0.06em] whitespace-nowrap text-ink-2 uppercase">
+      <span className="size-[6px] flex-none rounded-full" style={{ background: dot }} />
+      {children}
+    </span>
+  );
+}
 
 export function RecordedBadge() {
-  return (
-    <span className={`${BADGE} border border-line bg-surface-2 text-ink`}>
-      <Icon.List />
-      Recorded
-    </span>
-  );
+  return <Tag dot="var(--s-pass)">Recorded</Tag>;
 }
 
-export function CodeBadge({ label = "Checked by code" }: { label?: string }) {
-  return (
-    <span className={`${BADGE} bg-ink text-canvas`}>
-      <Icon.Check />
-      {label}
-    </span>
-  );
+export function CodeBadge({ label = "Code" }: { label?: string }) {
+  return <Tag dot="var(--ink)">{label === "Checked by code" ? "Code" : label}</Tag>;
 }
 
-export function JudgeBadge({ model }: { model?: string | null }) {
-  return (
-    <span className={`${BADGE} border border-dashed border-ink-3 text-ink-2`}>
-      <Icon.Speech />
-      AI judge
-      {model ? (
-        <>
-          {" · "}
-          <span className="mono font-medium">{model}</span>
-        </>
-      ) : null}
-    </span>
-  );
+/** The judge model is stored with each result but not displayed. */
+export function JudgeBadge() {
+  return <Tag dot="var(--s-need)">AI judge</Tag>;
 }
 
-export function BasisBadge({ basis, model }: { basis: "recorded" | "computed" | "judged"; model?: string | null }) {
+export function BasisBadge({ basis }: { basis: "recorded" | "computed" | "judged" }) {
   if (basis === "recorded") return <RecordedBadge />;
   if (basis === "computed") return <CodeBadge />;
-  return <JudgeBadge model={model} />;
+  return <JudgeBadge />;
 }
 
-export function MethodBadge({ method, model, codeLabel }: { method: "code" | "llm_judge"; model?: string | null; codeLabel?: string }) {
-  return method === "code" ? <CodeBadge label={codeLabel} /> : <JudgeBadge model={model} />;
+export function MethodBadge({ method, codeLabel }: { method: "code" | "llm_judge"; codeLabel?: string }) {
+  return method === "code" ? <CodeBadge label={codeLabel} /> : <JudgeBadge />;
 }
 
 // ---------- Layout ----------
 
-export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <section className={`rounded-[10px] border border-line bg-surface ${className}`}>{children}</section>;
+export function Card({ children, className = "", id }: { children: ReactNode; className?: string; id?: string }) {
+  return (
+    <section id={id} className={`rounded-[4px] border border-line bg-surface ${className}`}>
+      {children}
+    </section>
+  );
 }
 
-export function CardTitle({ title, sub }: { title: string; sub?: ReactNode }) {
+/** A panel heading: a small red label, a serif title, an optional note on the right, then a rule. */
+export function CardTitle({ title, sub, eyebrow, meta }: { title: string; sub?: ReactNode; eyebrow?: string; meta?: ReactNode }) {
   return (
-    <div>
-      <h2 className="m-0 text-[15px] font-semibold">{title}</h2>
-      {sub ? <p className="mt-1 mb-0 text-[13px] text-ink-3">{sub}</p> : null}
+    <div className="flex flex-col gap-1.5 border-b border-line pb-3">
+      {eyebrow ? <span className="mono text-[10.5px] font-medium tracking-[0.1em] text-eyebrow uppercase">{eyebrow}</span> : null}
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 className="m-0 font-serif text-[22px] leading-tight font-normal tracking-[-0.01em]">{title}</h2>
+        {meta ? <span className="mono text-[11px] text-ink-3">{meta}</span> : null}
+      </div>
+      {sub ? <p className="m-0 text-[12.5px] leading-normal text-ink-3">{sub}</p> : null}
     </div>
   );
 }
 
-export function PageTitle({ title, sub, children }: { title: string; sub: string; children?: ReactNode }) {
+export function PageTitle({ title, sub, eyebrow, children }: { title: string; sub: string; eyebrow?: string; children?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-4">
-      <div>
-        <h1 className="m-0 text-[26px] font-bold tracking-[-0.02em]">{title}</h1>
+      <div className="flex flex-col gap-1">
+        <span className="mono min-h-[16px] text-[11px] font-medium tracking-[0.1em] text-eyebrow uppercase">{eyebrow ?? ""}</span>
+        <h1 className="m-0 font-serif text-[40px] leading-none font-normal tracking-[-0.02em]">{title}</h1>
         <p className="mt-1.5 mb-0 text-sm text-ink-2">{sub}</p>
       </div>
-      {children ? <div className="flex flex-wrap items-center gap-2.5">{children}</div> : null}
+      {children ? <div className="flex flex-wrap items-end gap-2.5">{children}</div> : null}
     </div>
   );
 }
 
 export function Select({ label, id, ...props }: SelectHTMLAttributes<HTMLSelectElement> & { label: string; id: string }) {
   return (
-    <>
-      <label htmlFor={id} className="text-[13px] text-ink-3">
+    <span className="flex flex-col gap-1">
+      <label htmlFor={id} className="mono text-[10px] font-medium tracking-[0.1em] text-ink-3 uppercase">
         {label}
       </label>
-      <select
-        id={id}
-        {...props}
-        className="h-10 rounded-lg border border-line bg-surface px-3 text-sm font-medium text-ink"
-      />
-    </>
+      <select id={id} {...props} className="h-9 rounded-[3px] border border-line bg-surface px-2.5 text-[13px] font-medium text-ink" />
+    </span>
   );
 }
 
 export function LiveNote({ updatedAt }: { updatedAt?: Date }) {
   return (
-    <span className="flex items-center gap-2 text-[12.5px] text-ink-3">
-      <span className="size-[7px] animate-pulse-dot rounded-full bg-accent" />
-      {updatedAt ? `Live · updated ${updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}` : "Connecting…"}
+    <span className="mono flex h-9 items-center gap-2 text-[11px] text-ink-3">
+      <span className="size-[6px] animate-pulse-dot rounded-full bg-s-pass" />
+      {updatedAt ? `Updated ${updatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}` : "Connecting…"}
     </span>
   );
 }
 
 export function ErrorNote({ error, onRetry }: { error: Error; onRetry?: () => void }) {
   return (
-    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-[10px] border border-s-conf bg-s-conf-bg px-4 py-3 text-sm text-s-conf-fg">
+    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-[4px] border border-s-conf bg-s-conf-bg px-4 py-3 text-sm text-s-conf-fg">
       <span>
         <strong className="font-semibold">{error.message}</strong>
         {error.message.startsWith("Can't reach") ? (
@@ -175,7 +170,7 @@ export function Loading({ label = "Loading…" }: { label?: string }) {
   return <p className="m-0 py-10 text-center text-sm text-ink-3">{label}</p>;
 }
 
-// ---------- Icons (from the prototype) ----------
+// ---------- Icons ----------
 
 export const Icon = {
   Logo: () => (

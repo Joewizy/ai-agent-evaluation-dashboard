@@ -1,25 +1,25 @@
-/** Time windows and formatting. Windows are worked out in the browser, so "today" is the viewer's midnight. */
+/** Time windows and formatting. Windows are rolling: the last 24 hours, 7 days or 30 days up to now. */
 
-export type Window = "today" | "24h" | "7d";
+export type Window = "24h" | "7d" | "30d";
+
+/** The window used when the URL names none. */
+export const DEFAULT_WINDOW: Window = "24h";
 
 export const WINDOWS: { value: Window; label: string }[] = [
-  { value: "today", label: "Since midnight today" },
   { value: "24h", label: "Last 24 hours" },
   { value: "7d", label: "Last 7 days" },
+  { value: "30d", label: "Last 30 days" },
 ];
 
 export function isWindow(value: string | null): value is Window {
-  return value === "today" || value === "24h" || value === "7d";
+  return value === "24h" || value === "7d" || value === "30d";
 }
+
+const WINDOW_HOURS: Record<Window, number> = { "24h": 24, "7d": 7 * 24, "30d": 30 * 24 };
 
 /** The start of a window as an ISO time. Call it when fetching, not while rendering. */
 export function sinceOf(window: Window): string {
-  const now = new Date();
-  if (window === "24h") return new Date(now.getTime() - 24 * 3600_000).toISOString();
-  if (window === "7d") return new Date(now.getTime() - 7 * 24 * 3600_000).toISOString();
-  const midnight = new Date(now);
-  midnight.setHours(0, 0, 0, 0);
-  return midnight.toISOString();
+  return new Date(Date.now() - WINDOW_HOURS[window] * 3600_000).toISOString();
 }
 
 export function daysAgo(days: number): string {
@@ -27,7 +27,7 @@ export function daysAgo(days: number): string {
 }
 
 export function windowNoun(window: Window): string {
-  return { today: "since midnight", "24h": "in the last 24 hours", "7d": "in the last 7 days" }[window];
+  return { "24h": "in the last 24 hours", "7d": "in the last 7 days", "30d": "in the last 30 days" }[window];
 }
 
 const clock = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
