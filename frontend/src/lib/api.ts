@@ -241,7 +241,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(BASE + path, {
       ...init,
-      headers: { "Content-Type": "application/json", ...init?.headers },
+      // ngrok's free plan shows a browser warning page unless this header is present; other hosts ignore it.
+      headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "1", ...init?.headers },
       cache: "no-store",
     });
   } catch {
