@@ -48,6 +48,7 @@ def evaluate(run: Run) -> list[MetricResult]:
                 metric_id=metric.id,
                 score=score,
                 threshold=metric.threshold,
+                settings=metric.settings,
                 passed=None if skipped else score >= metric.threshold,
                 reason=f"Skipped: {outcome.skipped_reason}." if skipped else outcome.reason,
                 evidence=outcome.evidence,

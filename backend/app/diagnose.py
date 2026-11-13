@@ -1,4 +1,4 @@
-"""Diagnosis: what the evidence shows and what might explain a failure. See notes/design.md.
+"""Diagnosis: what the evidence shows and what might explain a failure.
 
 Reads the run and its metric results. Never changes either of them.
 

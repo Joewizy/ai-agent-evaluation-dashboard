@@ -1,4 +1,4 @@
-"""Plain-code checks on the judge's own answers. See notes/design.md, "When the evaluation judge itself is wrong".
+"""Plain-code checks on the judge's own answers, which become caveats when the judge may be wrong.
 
 These can't prove the judge right or wrong. They only spot answers that don't hold together, which
 count against any explanation resting on them and show up as caveats. Each check is cheap and deterministic.

@@ -62,7 +62,7 @@ def test_all_claims_backed(monkeypatch):
     )
     outcome = claims_supported(Run(**grok_run), groundedness)
     assert outcome.score == 1.0
-    assert outcome.reason == "All 1 claims are backed by the sources."
+    assert outcome.reason == "All 1 claims are supported by the sources."
 
 
 def test_made_up_quote_is_flagged(monkeypatch):

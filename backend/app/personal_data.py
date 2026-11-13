@@ -12,6 +12,8 @@ from dataclasses import dataclass
 class Found:
     kind: str    # "card_number", "iban", "email" or "phone"
     masked: str  # safe to show and store, e.g. "card ending 1234"
+    start: int   # character offsets of the match in the text, [start, end)
+    end: int
 
 
 CARD = re.compile(r"\b\d(?:[ -]?\d){12,18}\b")
@@ -50,7 +52,7 @@ def find_card_numbers(text: str) -> list[Found]:
     for match in CARD.finditer(text):
         number = digits_only(match.group())
         if passes_luhn(number):
-            found.append(Found("card_number", f"card number ending {number[-4:]}"))
+            found.append(Found("card_number", f"card number ending {number[-4:]}", match.start(), match.end()))
     return found
 
 
@@ -59,7 +61,7 @@ def find_ibans(text: str) -> list[Found]:
     for match in IBAN.finditer(text):
         iban = match.group().replace(" ", "")
         if passes_iban_check(iban):
-            found.append(Found("iban", f"IBAN {iban[:2]}… ending {iban[-4:]}"))
+            found.append(Found("iban", f"IBAN {iban[:2]}… ending {iban[-4:]}", match.start(), match.end()))
     return found
 
 
@@ -67,7 +69,7 @@ def find_emails(text: str) -> list[Found]:
     found = []
     for match in EMAIL.finditer(text):
         name, domain = match.group().split("@", 1)
-        found.append(Found("email", f"email {name[0]}***@{domain}"))
+        found.append(Found("email", f"email {name[0]}***@{domain}", match.start(), match.end()))
     return found
 
 
@@ -75,7 +77,7 @@ def find_phones(text: str) -> list[Found]:
     found = []
     for match in PHONE.finditer(text):
         number = digits_only(match.group())
-        found.append(Found("phone", f"phone number ending {number[-3:]}"))
+        found.append(Found("phone", f"phone number ending {number[-3:]}", match.start(), match.end()))
     return found
 
 

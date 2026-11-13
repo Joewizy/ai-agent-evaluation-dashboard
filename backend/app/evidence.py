@@ -1,4 +1,4 @@
-"""Evidence collection: turn a run and its metric results into observations. See notes/design.md.
+"""Evidence collection: turn a run and its metric results into observations.
 
 Observations are things we saw, and each one says how we know it:
   recorded = as the agent sent it, not checked by us

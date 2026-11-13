@@ -1,4 +1,4 @@
-"""Selective second opinion. See notes/design.md, "When the evaluation judge itself is wrong".
+"""Selective second opinion: a second judge model re-checks the claims an explanation rests on.
 
 Only runs when an explanation rests on a judged observation. A different model re-checks just those
 claims, against the same text the first judge used. Each re-check is kept as a SecondOpinion record.

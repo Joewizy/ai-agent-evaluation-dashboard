@@ -1,6 +1,6 @@
 id: groundedness
-name: Backed by sources
-description: Is every claim in the answer backed by what the agent looked up (context, tool results, search results)? The judge splits the answer into claims and checks each one against those sources, quoting the sentence it used.
+name: Grounded
+description: Is every claim in the answer supported by what the agent looked up (context, tool results, search results)? The judge splits the answer into claims and checks each one against those sources, quoting the sentence it used.
 area: Agent behaviour
 method: llm_judge
 check: claims_supported

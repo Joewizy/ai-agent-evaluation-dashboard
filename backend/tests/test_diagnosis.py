@@ -31,7 +31,7 @@ def diagnosis_for(**changes):
 
 
 def test_everything_passed_is_not_needed():
-    # the fake judge finds no claims, so "Backed by sources" is skipped for missing data. Not a reason to doubt the run
+    # the fake judge finds no claims, so "Grounded" is skipped for missing data. Not a reason to doubt the run
     diagnosis = diagnosis_for()
     assert diagnosis.outcome == "not_needed"
     assert any(caveat.startswith("'groundedness' skipped, missing data") for caveat in diagnosis.caveats)

@@ -5,6 +5,7 @@ Nothing is ever updated: results, diagnoses, reviews and resolutions are stored 
 The database file is backend/evals.db unless EVAL_DB_PATH says otherwise (tests use a temp file).
 """
 
+import json
 import os
 import sqlite3
 import uuid
@@ -12,7 +13,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from app.schemas import Diagnosis, MetricResult, Resolution, ResolutionIn, Review, ReviewIn, Run, RunIn
+from app.evaluate import load_metrics
+from app.schemas import Diagnosis, Metric, MetricResult, Resolution, ResolutionIn, Review, ReviewIn, Run, RunIn
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -125,6 +127,19 @@ def save_resolution(run_id: str, resolution_in: ResolutionIn) -> Resolution | No
     return resolution
 
 
+def parse_result(data: str, run: Run, metrics: dict[str, Metric]) -> MetricResult:
+    """Results saved before `review` was recorded take the metric's current review mode.
+
+    The review mode describes how a failure is settled, not the measurement, so a result scored by older code
+    is read the same way a new one would be: a slow run is confirmed without a review, not queued for one.
+    `settings` are not filled in: an old score was computed under the settings of its time, which are unknown.
+    """
+    raw = json.loads(data)
+    if "review" not in raw and raw.get("metric_id") in metrics:
+        raw["review"] = metrics[raw["metric_id"]].for_agent(run.agent_name).review
+    return MetricResult.model_validate(raw)
+
+
 @dataclass
 class Stored:
     """Everything stored about one run."""
@@ -165,9 +180,10 @@ def load(run_id: str | None = None, since: datetime | None = None, agent: str | 
         reviews = rows("reviews", "ORDER BY t.reviewed_at")
         resolutions = rows("resolutions")
 
+    metrics = {metric.id: metric for metric in load_metrics()}
     grouped = defaultdict(list)
     for run_id_, data in results:
-        grouped[run_id_].append(MetricResult.model_validate_json(data))
+        grouped[run_id_].append(parse_result(data, stored[run_id_].run, metrics))
     for run_id_, items in grouped.items():
         stored[run_id_].results = items
     for run_id_, data in diagnoses:

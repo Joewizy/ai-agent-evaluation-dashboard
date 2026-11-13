@@ -132,6 +132,12 @@ class Evidence(BaseModel):
     source: str | None = Field(None, description="What it was checked against, e.g. the policy sentence")
     found_in: str | None = Field(None, description="Which source our code found the quote in, e.g. 'context 1' or 'agent instructions'")
     note: str | None = None
+    span: list[int] | None = Field(
+        None,
+        min_length=2,
+        max_length=2,
+        description="Character offsets [start, end) of this item in the answer, when code located it there (e.g. a leak)",
+    )
 
 
 class MetricResult(BaseModel):
@@ -141,6 +147,10 @@ class MetricResult(BaseModel):
     metric_id: str
     score: float | None = Field(None, ge=0, le=1, description="None if the metric was skipped")
     threshold: float
+    settings: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The metric's settings as applied to this run, with any per-agent override merged, so the pass rule can be shown",
+    )
     passed: bool | None = Field(None, description="None if the metric was skipped")
     reason: str = Field(description="One sentence a person can read, e.g. 'Said €25, the policy says €10'")
     evidence: list[Evidence] = Field(default_factory=list)
@@ -158,7 +168,7 @@ class MetricResult(BaseModel):
     evaluated_at: datetime
 
 
-# ---------- Diagnosis (see notes/design.md) ----------
+# ---------- Diagnosis ----------
 
 
 class Ref(BaseModel):
@@ -253,7 +263,7 @@ class Diagnosis(BaseModel):
         return self
 
 
-# ---------- Human review and status (Phase 2) ----------
+# ---------- Human review and status ----------
 
 ReviewVerdict = Literal["correct", "incorrect", "inconclusive"]
 
@@ -315,6 +325,15 @@ class RunReport(BaseModel):
     resolution: Resolution | None = None
 
 
+class RowResult(BaseModel):
+    """One metric's result in a run list row: enough to show a value without loading the run."""
+
+    score: float | None
+    passed: bool | None
+    failed: int = Field(0, description="Evidence items that did not hold: unbacked claims, failed steps, leaks")
+    total: int = Field(0, description="Evidence items checked")
+
+
 class RunRow(BaseModel):
     """One line in the run list."""
 
@@ -323,7 +342,10 @@ class RunRow(BaseModel):
     mode: RunMode
     received_at: datetime
     status: RunStatus
+    latency_ms: int | None = None
+    cost_usd: float | None = None
     failed_metrics: list[str]
+    results: dict[str, RowResult] = Field(default_factory=dict, description="By metric id")
     causes: list[str] = Field(description="Explanation patterns, or 'no_explanation' when a failure has none")
 
 
@@ -387,4 +409,8 @@ class Summary(BaseModel):
     pending_reviews: int
     actions: list[Action] = Field(description="Actions recorded on these runs, newest first")
     judge_vs_humans: ReviewCount = Field(description="Reviews of AI-judged metric results: how often people agreed with the judge")
+    agreement_by_metric: dict[str, ReviewCount] = Field(
+        default_factory=dict,
+        description="Reviews of metric results, by metric id: how often reviewers said the failure was real",
+    )
     explanations_reviewed: ReviewCount = Field(description="Reviews of explanations: how often people found them right or useful")

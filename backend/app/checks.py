@@ -89,7 +89,7 @@ def no_personal_data(run: Run, metric: Metric) -> Outcome:
     if not found:
         return Outcome(score=1.0, reason="No personal data found in the answer.")
 
-    evidence = [Evidence(item=f.masked, verdict="failed", note=f.kind) for f in found]
+    evidence = [Evidence(item=f.masked, verdict="failed", note=f.kind, span=[f.start, f.end]) for f in found]
     listed = ", ".join(f.masked for f in found)
     reason = f"Found {len(found)} piece(s) of personal data in the answer: {listed}."
     return Outcome(score=0.0, reason=reason, evidence=evidence)
@@ -257,7 +257,7 @@ def check_claims(
 
 
 def claims_supported(run: Run, metric: Metric) -> Outcome:
-    """groundedness = claims backed by the sources ÷ total claims (RAGAS faithfulness).
+    """groundedness = claims supported by the sources ÷ total claims (RAGAS faithfulness).
 
     Sources = context plus tool and retrieval results (see sources_for).
     1. The judge splits the answer into claims.
@@ -285,17 +285,17 @@ def claims_supported(run: Run, metric: Metric) -> Outcome:
 
     from_instructions = [e for e in backed if e.found_in == INSTRUCTIONS]
     if not contradicted and not not_mentioned:
-        reason = f"All {len(evidence)} claims are backed by the sources."
+        reason = f"All {len(evidence)} claims are supported by the sources."
         if from_instructions:
             reason += f" {len(from_instructions)} of them by the agent's own instructions."
     else:
-        parts = [f"{len(contradicted) + len(not_mentioned)} of {len(evidence)} claims aren't backed by the sources."]
+        parts = [f"{len(contradicted) + len(not_mentioned)} of {len(evidence)} claims aren't supported by the sources."]
         for e in contradicted:
             parts.append(f'Contradicted: "{e.item}" (the sources say "{e.source}").')
         for e in not_mentioned:
             parts.append(f'Not in the sources: "{e.item}".')
         if from_instructions:
-            parts.append(f"{len(from_instructions)} backed claim(s) come from the agent's own instructions.")
+            parts.append(f"{len(from_instructions)} supported claim(s) come from the agent's own instructions.")
         reason = " ".join(parts)
     if made_up_quotes:
         reason += f" Judge check: {made_up_quotes} quote(s) from the judge aren't in the sources, so treat this result with care."

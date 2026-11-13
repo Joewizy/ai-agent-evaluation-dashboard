@@ -1,12 +1,14 @@
 """Phase 2: human review, run status, the run list and the "since this morning" summary."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import judge
+from app import judge, storage
 from app.main import app
+from app.schemas import RunIn
 from tests.test_evidence import numbered, verdict
 
 client = TestClient(app)
@@ -140,6 +142,53 @@ def test_limits_can_differ_by_agent():
     assert "cost" in other
 
 
+def test_a_result_records_the_settings_it_was_scored_with():
+    slow_local = {**passing, "agent_name": "football-agent", "latency_ms": 22800}
+    results = {r["metric_id"]: r for r in client.get(f"/runs/{send(slow_local)}").json()["results"]}
+    assert results["latency"]["settings"]["limit"] == 40000
+    assert results["latency"]["threshold"] == 0.5
+
+
+def test_a_leak_records_where_it_is_in_the_answer():
+    report = client.get(f"/runs/{send(leaked)}").json()
+    result = next(r for r in report["results"] if r["metric_id"] == "data_leakage")
+    start, end = result["evidence"][0]["span"]
+    assert report["run"]["output"][start:end] == "ana.lopez@example.com"
+
+
+def test_results_stored_before_review_modes_take_the_metrics_current_mode():
+    """A result saved without `review` (older code) is read with the metric's current mode; its settings stay unknown."""
+    run = storage.save_run(RunIn(**too_slow))
+    old_shape = {
+        "run_id": run.id,
+        "metric_id": "latency",
+        "score": 0.0,
+        "threshold": 0.5,
+        "passed": False,
+        "reason": "Took 20000 ms, over the 10000 ms limit.",
+        "evidence": [],
+        "method": "code",
+        "evaluated_at": "2026-11-11T22:20:08Z",
+    }
+    with storage.connect() as connection:
+        connection.execute(
+            "INSERT INTO results (run_id, metric_id, passed, data) VALUES (?, ?, ?, ?)", (run.id, "latency", 0, json.dumps(old_shape))
+        )
+    report = client.get(f"/runs/{run.id}").json()
+    assert report["status"] == "confirmed"  # measured, so no review is waited for
+    assert report["results"][0]["review"] == "auto"
+    assert report["results"][0]["settings"] == {}  # the limit it was scored under isn't known, so none is claimed
+
+
+def test_a_row_carries_each_metrics_value():
+    """GET /runs rows carry each metric's score and counts, so the list can show one value per check."""
+    run_id = send(too_slow)
+    row = next(r for r in client.get("/runs").json() if r["id"] == run_id)
+    assert row["latency_ms"] == 20000
+    assert row["results"]["latency"] == {"score": 0.0, "passed": False, "failed": 0, "total": 0}
+    assert row["results"]["execution_success"]["score"] is None  # skipped: the run has no steps
+
+
 def test_reviewing_never_changes_the_result():
     run_id = send(leaked)
     before = client.get(f"/runs/{run_id}").json()
@@ -222,12 +271,13 @@ def test_summary_since_this_morning(monkeypatch):
     assert (summary["failed_runs"], summary["runs_with_several_causes"]) == (4, 0)
 
     grounded = summary["metrics"]["groundedness"]
-    assert grounded["name"] == "Backed by sources"
+    assert grounded["name"] == "Grounded"
     assert (grounded["scored"], grounded["failed"], grounded["could_not_run"]) == (1, 1, 1)
     assert grounded["average_score"] == 0.0  # the run that couldn't be checked is left out of the average
 
     assert summary["judge_vs_humans"] == {"correct": 1, "incorrect": 0, "inconclusive": 0, "agreement": 1.0}
     assert summary["explanations_reviewed"]["correct"] == 1
+    assert summary["agreement_by_metric"]["groundedness"]["agreement"] == 1.0
 
 
 def test_a_run_with_two_possible_causes_counts_under_both(monkeypatch):
@@ -262,6 +312,6 @@ def test_summary_lists_actions_newest_first():
 
 def test_metrics_say_how_each_is_checked():
     metrics = {m["id"]: m for m in client.get("/metrics").json()}
-    assert metrics["groundedness"]["name"] == "Backed by sources"
+    assert metrics["groundedness"]["name"] == "Grounded"
     assert (metrics["groundedness"]["method"], metrics["groundedness"]["judge_model"]) == ("llm_judge", "qwen3:8b")
     assert (metrics["latency"]["method"], metrics["latency"]["judge_model"]) == ("code", None)

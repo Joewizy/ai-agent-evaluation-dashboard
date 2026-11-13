@@ -1,4 +1,4 @@
-"""Human review, run status and the "since this morning" summary (Phase 2).
+"""Human review, run status and the summary over a time window.
 
 Status comes from what's stored, it's never stored itself:
   evaluating -> passed / could_not_run / needs_review -> confirmed or false_alarm -> resolved
@@ -22,10 +22,12 @@ from app.evaluate import load_metrics
 from app.schemas import (
     Action,
     AgentSummary,
+    MetricResult,
     MetricSummary,
     Review,
     ReviewCount,
     ReviewIn,
+    RowResult,
     RunReport,
     RunRow,
     RunStatus,
@@ -89,6 +91,18 @@ def causes(stored: Stored) -> list[str]:
     return list(dict.fromkeys(explanation.pattern or OTHER for explanation in explanations))
 
 
+UNMET = {"failed", "missing", "left_out", "key_contradicted"}
+
+
+def row_result(result: MetricResult) -> RowResult:
+    return RowResult(
+        score=result.score,
+        passed=result.passed,
+        failed=sum(evidence.verdict in UNMET for evidence in result.evidence),
+        total=len(result.evidence),
+    )
+
+
 def row(stored: Stored) -> RunRow:
     return RunRow(
         id=stored.run.id,
@@ -96,7 +110,10 @@ def row(stored: Stored) -> RunRow:
         mode=stored.run.mode,
         received_at=stored.run.received_at,
         status=status(stored),
+        latency_ms=stored.run.latency_ms,
+        cost_usd=stored.run.cost_usd,
         failed_metrics=[result.metric_id for result in stored.results if result.passed is False],
+        results={result.metric_id: row_result(result) for result in stored.results},
         causes=causes(stored),
     )
 
@@ -140,6 +157,7 @@ def summarise(runs: list[Stored], since: datetime) -> Summary:
     failure_causes = Counter()
     failed_runs = several_causes = 0
     judge_reviews, explanation_reviews = [], []
+    metric_reviews: dict[str, list[Review]] = defaultdict(list)
 
     for stored in runs:
         run_status = status(stored)
@@ -170,7 +188,9 @@ def summarise(runs: list[Stored], since: datetime) -> Summary:
         for review in latest(stored.reviews).values():
             if review.target == "explanation":
                 explanation_reviews.append(review)
-            elif methods.get(review.metric_id) == "llm_judge":
+                continue
+            metric_reviews[review.metric_id].append(review)
+            if methods.get(review.metric_id) == "llm_judge":
                 judge_reviews.append(review)
 
     for metric_id, values in scores.items():
@@ -196,5 +216,6 @@ def summarise(runs: list[Stored], since: datetime) -> Summary:
             reverse=True,
         ),
         judge_vs_humans=count_reviews(judge_reviews),
+        agreement_by_metric={metric_id: count_reviews(reviews) for metric_id, reviews in sorted(metric_reviews.items())},
         explanations_reviewed=count_reviews(explanation_reviews),
     )
