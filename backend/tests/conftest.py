@@ -8,6 +8,8 @@ def no_real_judge(monkeypatch):
     """Tests never call Ollama. By default the fake judge finds no claims, so groundedness is skipped.
     Tests that need judge answers set their own with fake_judge() in test_groundedness.py.
     Second opinions are off unless a test turns them on (test_second_opinion.py)."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)  # tests use the local model names, whatever backend/.env sets
+    monkeypatch.delenv("JUDGE_MODEL", raising=False)
     monkeypatch.setattr(judge, "ask", lambda prompt, shape, model=None: {"claims": []})
     monkeypatch.setattr(judge, "unload", lambda model: None)
     monkeypatch.setenv("SECOND_JUDGE_MODEL", "")

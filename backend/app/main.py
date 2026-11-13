@@ -2,8 +2,15 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Response
+from dotenv import load_dotenv
+
+# backend/.env holds local settings such as GEMINI_API_KEY. It never overrides variables already set,
+# so a host's own settings (Render, the test suite) win.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Response  # noqa: E402
 
 from app import judge, review, storage
 from app.diagnose import diagnose
