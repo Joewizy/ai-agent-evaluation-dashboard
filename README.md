@@ -4,7 +4,7 @@ Evaluate AI agents and models, whatever they're built with, and see **what faile
 
 The agent being evaluated can use any model (GPT, Claude, Gemini, Llama, your own) and any framework. It sends us a record of what it did, and we score it.
 
-Built for Citi upStart 2026 (agent evaluation track).
+![A run page: the question, the checks, the answer, and the review](agent%20run%20page.png)
 
 ## How it works
 
