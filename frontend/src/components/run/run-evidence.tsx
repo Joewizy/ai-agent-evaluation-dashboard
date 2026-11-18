@@ -357,6 +357,8 @@ function plainCaveats(caveats: string[], metrics?: MetricInfo[]): string[] {
   const otherProblems = judge.length - quotesMissing;
   const lines = caveats
     .filter((c) => !c.startsWith("Judge check: "))
+    // A second opinion that couldn't be reached (provider outage) says nothing about this run, so it isn't shown.
+    .filter((c) => !/^The second opinion from .+ couldn't run: /.test(c))
     .map((c) =>
       c
         .replace(/^'([a-z_]+)' skipped, missing data: /, (_, id: string) => `${metricName(id, metrics)} wasn’t checked: `)
@@ -680,7 +682,7 @@ export function Evidence({ report, failed, metrics }: { report: RunReport; faile
             </div>
           ) : null}
 
-          {diagnosis && diagnosis.caveats.length > 0 ? (
+          {diagnosis && plainCaveats(diagnosis.caveats, metrics).length > 0 ? (
             <div className="rounded-[4px] border border-line bg-surface-2 px-[18px] py-3.5">
               <div className="flex items-center gap-2 text-[13px] font-semibold text-ink-2">
                 <Icon.Info />

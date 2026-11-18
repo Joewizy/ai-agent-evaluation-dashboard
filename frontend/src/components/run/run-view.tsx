@@ -758,10 +758,15 @@ function StepCard({
         <p className="m-0 text-[12.5px] text-ink-3">The model read the question, the instructions and the results of earlier steps.</p>
       ) : null}
       {labelled ? (
-        <p className="m-0 text-[13px] text-ink-2">
-          The agent recorded this step as “{String(step.input)}” and “{typeof step.output === "string" ? step.output : describeOutput(step.output)}”, not the model’s
-          actual input and output.
-        </p>
+        <>
+          <Labelled label="Input">
+            <Folded text={String(step.input)} lines={6} />
+          </Labelled>
+          <Labelled label="Output">
+            <Folded text={typeof step.output === "string" ? step.output : describeOutput(step.output)} lines={6} />
+          </Labelled>
+          <p className="m-0 text-[12px] text-ink-3">As recorded by the agent, not the model’s full prompt and response.</p>
+        </>
       ) : input ? (
         <Labelled label="Input">
           <Folded text={input} lines={6} mono={typeof step.input !== "string"} />

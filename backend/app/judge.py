@@ -63,6 +63,33 @@ class JudgeError(Exception):
     """The judge couldn't be reached or gave an answer we couldn't read."""
 
 
+def fallback_model() -> str | None:
+    """The local model used when a Gemini judge fails. JUDGE_FALLBACK_MODEL wins; set it empty to turn the fallback off."""
+    if "JUDGE_FALLBACK_MODEL" in os.environ:
+        return os.environ["JUDGE_FALLBACK_MODEL"] or None
+    return DEFAULT_MODEL
+
+
+def with_fallback(model: str, check):
+    """Run check(model). If a Gemini judge fails, run the whole check again on the local fallback model.
+
+    Returns (result, model actually used), so the stored result names the judge that produced it.
+    The fallback model is unloaded afterwards to free memory for the agent's own model.
+    """
+    try:
+        return check(model), model
+    except JudgeError as gemini_error:
+        local = fallback_model()
+        if not is_gemini(model) or not local:
+            raise
+        try:
+            return check(local), local
+        except JudgeError as local_error:
+            raise JudgeError(f"{gemini_error}; the local fallback {local} also failed: {local_error}") from local_error
+        finally:
+            unload(local)
+
+
 def ask(prompt: str, answer_shape: dict, model: str = DEFAULT_MODEL) -> dict:
     """Send one prompt and get back JSON in the given shape (a JSON schema)."""
     return ask_gemini(prompt, answer_shape, model) if is_gemini(model) else ask_ollama(prompt, answer_shape, model)

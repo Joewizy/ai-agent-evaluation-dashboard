@@ -269,12 +269,15 @@ def claims_supported(run: Run, metric: Metric) -> Outcome:
     if not sources:
         return Outcome(skipped_reason="the run has no sources to check the answer against (no context or tool results)")
 
-    model = judge.pick_model(metric.settings.get("judge_model"))
-    try:
+    def judged(model: str):
         claims = split_claims(run.output, model)
-        if not claims:
+        return check_claims(claims, sources, model) if claims else None
+
+    try:
+        checked, model = judge.with_fallback(judge.pick_model(metric.settings.get("judge_model")), judged)
+        if checked is None:
             return Outcome(skipped_reason="the answer has no factual claims to check")
-        evidence, made_up_quotes = check_claims(claims, sources, model)
+        evidence, made_up_quotes = checked
     except judge.JudgeError as error:
         return Outcome(skipped_reason=f"the judge didn't answer: {error}", could_not_run=True)
 
@@ -323,16 +326,22 @@ def matches_answer_key(run: Run, metric: Metric) -> Outcome:
     if not run.expected_output:
         return Outcome(skipped_reason="the run has no expected answer")
 
-    model = judge.pick_model(metric.settings.get("judge_model"))
-    try:
+    def judged(model: str):
         answer_claims = split_claims(run.output, model)
         key_claims = split_claims(run.expected_output, model)
         if not answer_claims and not key_claims:
-            return Outcome(skipped_reason="neither the answer nor the answer key has factual claims")
+            return None
         answer_checked, made_up_quotes = (
             check_claims(answer_claims, [("answer key", run.expected_output)], model, "answer key") if answer_claims else ([], 0)
         )
         key_checked, _ = check_claims(key_claims, [("answer", run.output)], model, "answer") if key_claims else ([], 0)
+        return answer_checked, made_up_quotes, key_checked
+
+    try:
+        checked, model = judge.with_fallback(judge.pick_model(metric.settings.get("judge_model")), judged)
+        if checked is None:
+            return Outcome(skipped_reason="neither the answer nor the answer key has factual claims")
+        answer_checked, made_up_quotes, key_checked = checked
     except judge.JudgeError as error:
         return Outcome(skipped_reason=f"the judge didn't answer: {error}", could_not_run=True)
 
